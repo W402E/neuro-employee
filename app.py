@@ -119,7 +119,7 @@ def read_document(uploaded):
 
 
 def _png_on_disk(payload):
-    """Сохранить байты картинки во временный файл — нужен для определения поворота."""
+    """Сохранить байты картинки во временный файл — нужен для определения rotate90а."""
     handle, path = tempfile.mkstemp(suffix=".png")
     with os.fdopen(handle, "wb") as file_handle:
         file_handle.write(payload)
@@ -129,7 +129,7 @@ def _png_on_disk(payload):
 def document_image(path, scale=1.0, shift_x=0.5, shift_y=0.5):
     """Картинка документа для показа.
 
-    scale  — приближение: 1 = весь лист; 8 = узкая полоса, но в полном разрешении;
+    scale  — приближение: 1 = весь sheet; 8 = узкая полоса, но в полном разрешении;
     shift_x, shift_y — положение лупы (0…1) по ширине и высоте.
 
     Для PDF область рендерится заново с большим увеличением — поэтому буквы остаются
@@ -140,7 +140,7 @@ def document_image(path, scale=1.0, shift_x=0.5, shift_y=0.5):
         import numpy as np
         import pymupdf
 
-        доля = 1.0 / max(scale, 1.0)                 # какую часть листа показываем
+        доля = 1.0 / max(scale, 1.0)                 # какую часть sheetа показываем
         левый_край = min(max(shift_x - доля / 2, 0.0), 1.0 - доля)
         верхний_край = min(max(shift_y - доля / 2, 0.0), 1.0 - доля)
 
@@ -184,12 +184,12 @@ def document_image(path, scale=1.0, shift_x=0.5, shift_y=0.5):
                 картинка = cv2.resize(картинка, (int(картинка.shape[1] * коэффициент),
                                                  int(картинка.shape[0] * коэффициент)))
 
-        try:                                  # определение поворота не должно гасить показ
-            угол = recognition.orientation_angle(_png_on_disk(поток))
-            if угол in (90, 180, 270):
-                повороты = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
+        try:                                  # определение rotate90а не должно гасить показ
+            angle = recognition.orientation_angle(_png_on_disk(поток))
+            if angle in (90, 180, 270):
+                rotate90ы = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
                             270: cv2.ROTATE_90_COUNTERCLOCKWISE}
-                картинка = cv2.rotate(картинка, повороты[угол])
+                картинка = cv2.rotate(картинка, rotate90ы[angle])
         except Exception:                     # noqa: BLE001
             pass
         return cv2.cvtColor(картинка, cv2.COLOR_BGR2RGB)
@@ -199,9 +199,9 @@ def document_image(path, scale=1.0, shift_x=0.5, shift_y=0.5):
 
 
 def loupe_viewer(image, height=820):
-    """Документ с лупой и большим режимом: увеличение, инверсия, поворот, прокрутка.
+    """Документ с лупой по кнопке и большим видом с инструментами.
 
-    image — картинка в RGB (numpy). Лупа включается в обычном режиме, инструменты — в обоих.
+    Имена в скрипте — латиницей (требование к коду), подписи для человека — по-русски.
     """
     try:
         import base64                       # noqa: PLC0415
@@ -225,134 +225,140 @@ def loupe_viewer(image, height=820):
 <style>
   * { box-sizing: border-box; }
   body { margin:0; font-family:"Segoe UI", Arial, sans-serif; color:#15233a; background:#f7f9fc; }
-  .плашка { display:flex; gap:6px; align-items:center; padding:6px 8px; background:#eef4fa;
-            border:1px solid #d3dfec; border-radius:8px 8px 0 0; flex-wrap:wrap; }
-  .плашка button { padding:5px 9px; border:1px solid #b9c7d8; background:#fff; border-radius:6px;
-                   cursor:pointer; font-size:13px; }
-  .плашка button.выбран { background:#1f5f9e; color:#fff; border-color:#1f5f9e; }
-  .плашка input[type=range] { width:110px; }
-  .надпись { font-size:13px; color:#41536a; margin-left:auto; }
-  .поле { position:relative; height:calc(100% - 42px); overflow:auto; background:#fff;
+  .bar { display:flex; gap:6px; align-items:center; padding:6px 8px; background:#eef4fa;
+         border:1px solid #d3dfec; border-radius:8px 8px 0 0; flex-wrap:wrap; }
+  .bar button { padding:5px 10px; border:1px solid #b9c7d8; background:#fff; border-radius:6px;
+                cursor:pointer; font-size:13px; }
+  .bar button.on { background:#1f5f9e; color:#fff; border-color:#1f5f9e; }
+  .bar input[type=range] { width:120px; }
+  .status { font-size:13px; color:#41536a; margin-left:auto; }
+  .view { position:relative; height:calc(100% - 46px); overflow:auto; background:#fff;
           border:1px solid #d3dfec; border-top:0; border-radius:0 0 8px 8px; }
-  .поле.большой { position:fixed; inset:0; height:auto; border-radius:0; z-index:9999; }
-  img.лист { display:block; width:100%; transition:transform .12s; transform-origin:top left; }
-  .поле.большой img.лист { width:auto; max-width:none; }
-  .лупа { position:absolute; width:170px; height:170px; border-radius:50%;
-          border:3px solid #1f5f9e; box-shadow:0 6px 16px rgba(20,40,80,.35);
-          background-repeat:no-repeat; background-color:#fff; pointer-events:none;
-          display:none; z-index:20; }
-  .подсказка { font-size:12px; color:#5a6b80; padding:4px 8px; }
+  .view.big { position:fixed; inset:0; height:auto; border-radius:0; z-index:9999; }
+  img.sheet { display:block; width:100%; transition:transform .12s; transform-origin:top left; }
+  .view.big img.sheet { width:auto; max-width:none; }
+  .loupe { position:absolute; width:180px; height:180px; border-radius:50%;
+           border:3px solid #1f5f9e; box-shadow:0 6px 16px rgba(20,40,80,.35);
+           background-repeat:no-repeat; background-color:#fff; pointer-events:none;
+           display:none; z-index:20; }
+  .closer { position:absolute; width:24px; height:24px; border-radius:50%; background:#1f5f9e;
+            color:#fff; border:2px solid #fff; font-size:14px; line-height:19px; text-align:center;
+            cursor:pointer; z-index:30; display:none; user-select:none; }
+  .hint { font-size:12px; color:#5a6b80; padding:4px 8px; }
 </style></head><body>
-<div id="корень" style="height:100%">
-  <div class="плашка">
-    <button id="режим" class="" onclick="режим()">Большой вид</button>
-    <button onclick="кратность(-1)">− лупа</button>
-    <button onclick="кратность(1)">+ лупа</button>
-    <input type="range" id="увеличение" min="1" max="10" step="0.5" value="1"
-           oninput="увеличить(this.value)">
-    <button onclick="инверсия()">инверсия</button>
-    <button onclick="поворот()">поворот 90°</button>
-    <button onclick="сброс()">сброс</button>
-    <button onclick="полный()">⛶ во весь экран</button>
-    <button onclick="скачать()">скачать</button>
-    <span class="надпись" id="сведения">лупа 3× · увеличение 1×</span>
+<div style="height:100%">
+  <div class="bar">
+    <button id="loupeBtn" onclick="toggleLoupe()">Лупа</button>
+    <button id="bigBtn" onclick="toggleBig()">Большой вид</button>
+    <button id="minusBtn" onclick="loupeStep(-1)">− лупа</button>
+    <button id="plusBtn" onclick="loupeStep(1)">+ лупа</button>
+    <input type="range" id="zoomRange" min="1" max="10" step="0.5" value="1"
+           oninput="setZoom(this.value)" title="увеличение листа">
+    <button onclick="toggleInvert()">инверсия</button>
+    <button onclick="rotate90()">поворот 90°</button>
+    <button onclick="resetAll()">сброс</button>
+    <button onclick="openInNewTab()">открыть в новой вкладке</button>
+    <button onclick="downloadImage()">скачать</button>
+    <span class="status" id="status">обычный вид</span>
   </div>
-  <div class="поле" id="поле">
-    <img class="лист" id="лист" src="data:image/png;base64,__КАРТИНКА__" alt="оригинал документа">
-    <div class="лупа" id="лупа"></div>
+  <div class="view" id="viewArea">
+    <img class="sheet" id="sheet" src="data:image/png;base64,__КАРТИНКА__" alt="оригинал документа">
+    <div class="loupe" id="loupe"></div>
+    <div class="closer" id="loupeClose" onclick="loupeOff()" title="Убрать лупу">✕</div>
   </div>
-  <div class="подсказка" id="подсказка">Водите курсором по листу — рядом появится лупа.
-    «Большой вид» растягивает лист на всё окно, тогда увеличение задаёт ползунок,
-    а по листу двигаются прокруткой. «инверсия» помогает на бледных сканах.</div>
+  <div class="hint" id="hint">Обычный вид: нажмите «Лупа», наведите курсор на документ — рядом
+    появится кружок с увеличенным куском, колесо мыши меняет кратность, ✕ убирает лупу.
+    «Большой вид» открывает документ на всё поле: там увеличение задаёт ползунок, а по листу
+    двигаются прокруткой. «инверсия» помогает на бледных сканах.</div>
 </div>
 <script>
-let крат = 3, увеличение_тек = 1, угол = 0, инверт = false, большой = false;
-const лист = document.getElementById('лист');
-const лупа = document.getElementById('лупа');
-const поле = document.getElementById('поле');
-const сведения = document.getElementById('сведения');
-const кнопка_режима = document.getElementById('режим');
-const ползунок = document.getElementById('увеличение');
+let loupeZoom = 3, zoomLevel = 1, angle = 0, inverted = false, bigView = false, loupeOn = false;
+const sheet = document.getElementById('sheet');
+const loupe = document.getElementById('loupe');
+const loupeClose = document.getElementById('loupeClose');
+const viewArea = document.getElementById('viewArea');
+const statusText = document.getElementById('status');
+const loupeBtn = document.getElementById('loupeBtn');
+const bigBtn = document.getElementById('bigBtn');
+const zoomRange = document.getElementById('zoomRange');
 
-function обновить() {
-  лист.style.transform = 'rotate(' + угол + 'deg) scale(' + увеличение_тек + ')';
-  лист.style.filter = инверт ? 'invert(1)' : 'none';
-  сведения.textContent = 'лупа ' + крат + '× · увеличение ' + увеличение_тек + '×'
-                          + (угол ? ' · поворот ' + угол + '°' : '')
-                          + (инверт ? ' · инверсия' : '') + (большой ? ' · большой вид' : '');
-  // фон лупы: увеличенная копия самого листа
-  лупа.style.backgroundImage = 'url(' + лист.src + ')';
-  лупа.style.backgroundSize = (крат * 100) + '% auto';
+function refreshView() {
+  sheet.style.transform = 'rotate(' + angle + 'deg) scale(' + zoomLevel + ')';
+  sheet.style.filter = inverted ? 'invert(1)' : 'none';
+  loupeBtn.classList.toggle('on', loupeOn);
+  bigBtn.classList.toggle('on', bigView);
+  document.getElementById('minusBtn').style.display = bigView ? 'none' : '';
+  document.getElementById('plusBtn').style.display = bigView ? 'none' : '';
+  loupeBtn.style.display = bigView ? 'none' : '';
+  if (bigView || !loupeOn) { hideLoupe(); }
+  let режим_надписи = 'обычный вид';
+  if (bigView) { режим_надписи = 'большой вид · увеличение ' + zoomLevel + '×'; }
+  else if (loupeOn) { режим_надписи = 'лупа ' + loupeZoom + '×'; }
+  statusText.textContent = режим_надписи
+    + (angle ? ' · поворот ' + angle + '°' : '')
+    + (inverted ? ' · инверсия' : '');
 }
-function кратность(шаг) { крат = Math.min(10, Math.max(2, крат + шаг)); обновить(); }
-function инверсия() { инверт = !инверт; обновить(); }
-function поворот() { угол = (угол + 90) % 360; обновить(); }
-function увеличить(значение) { увеличение_тек = parseFloat(значение); обновить(); }
-function сброс() { крат = 3; увеличение_тек = 1; угол = 0; инверт = false;
-                   ползунок.value = 1; обновить(); }
-
-function режим() {
-  большой = !большой;
-  поле.classList.toggle('большой', большой);
-  кнопка_режима.classList.toggle('выбран', большой);
-  кнопка_режима.textContent = большой ? 'Обычный вид' : 'Большой вид';
-  document.getElementById('подсказка').style.display = большой ? 'none' : 'block';
-  if (большой) { ползунок.value = 2; увеличение_тек = 2; }
-  else { ползунок.value = 1; увеличение_тек = 1; }
-  обновить();
+function hideLoupe() { loupe.style.display = 'none'; loupeClose.style.display = 'none'; }
+function toggleLoupe() { loupeOn = !loupeOn; refreshView(); }
+function loupeOff() { loupeOn = false; hideLoupe(); refreshView(); }
+function loupeStep(step) { loupeZoom = Math.min(10, Math.max(2, loupeZoom + step)); refreshView(); }
+function toggleInvert() { inverted = !inverted; refreshView(); }
+function rotate90() { angle = (angle + 90) % 360; refreshView(); }
+function setZoom(value) { zoomLevel = parseFloat(value); refreshView(); }
+function resetAll() { loupeZoom = 3; zoomLevel = 1; angle = 0; inverted = false;
+                      zoomRange.value = 1; refreshView(); }
+function toggleBig() {
+  bigView = !bigView;
+  viewArea.classList.toggle('big', bigView);
+  zoomRange.value = bigView ? 2 : 1;
+  zoomLevel = bigView ? 2 : 1;
+  document.getElementById('hint').style.display = bigView ? 'none' : 'block';
+  refreshView();
 }
-function полный() {
-  if (поле.requestFullscreen) {
-    if (document.fullscreenElement) { document.exitFullscreen(); }
-    else { поле.requestFullscreen().catch(() => {
-      режим();     // если браузер не разрешил — переходим в большой вид
-    }); }
-  } else { режим(); }
+function openInNewTab() {
+  const win = window.open('', '_blank');
+  if (!win) { return; }
+  win.document.write('<title>Оригинал документа</title>' +
+    '<body style="margin:0;background:#333;display:flex;justify-content:center">' +
+    '<img src="' + sheet.src + '" style="width:100%;max-width:none">' +
+    '<p style="position:fixed;bottom:6px;left:8px;color:#fff;font:13px sans-serif">' +
+    'Ctrl + колесо мыши — масштаб браузера. Закройте вкладку для возврата.</p></body>');
+  win.document.close();
 }
-function скачать() {
-  const ссылка = document.createElement('a');
-  ссылка.href = лист.src;
-  ссылка.download = 'документ.png';
-  ссылка.click();
+function downloadImage() {
+  const link = document.createElement('a');
+  link.href = sheet.src;
+  link.download = 'документ.png';
+  link.click();
 }
-
-// лупа: точка под курсором ставится в центр кружка
-поле.addEventListener('mousemove', (событие) => {
-  const рамка = лист.getBoundingClientRect();
-  if (рамка.width < 10 || рамка.height < 10) { return; }
-  const x = событие.clientX - рамка.left;          // внутри показанной картинки
-  const y = событие.clientY - рамка.top;
-  const внутри_x = x >= 0 && x <= рамка.width;
-  const внутри_y = y >= 0 && y <= рамка.height;
-  if (!внутри_x || !внутри_y) { лупа.style.display = 'none'; return; }
-  const размер = 170;
-  // масштаб фона считаем от размеров показанной картинки, а не от координат
-  лупа.style.backgroundSize = (рамка.width * крат) + 'px ' + (рамка.height * крат) + 'px';
-  лупа.style.left = (x - размер / 2) + 'px';
-  лупа.style.top = (y - размер / 2) + 'px';
-  лупа.style.backgroundPosition = (-(x * крат - размер / 2)) + 'px ' +
-                                   (-(y * крат - размер / 2)) + 'px';
-  лупа.style.display = 'block';
+viewArea.addEventListener('mousemove', (event) => {
+  if (!loupeOn || bigView) { return; }
+  const box = sheet.getBoundingClientRect();
+  if (box.width < 10 || box.height < 10) { return; }
+  const x = event.clientX - box.left;
+  const y = event.clientY - box.top;
+  if (x < 0 || y < 0 || x > box.width || y > box.height) { hideLoupe(); return; }
+  const size = 180;
+  loupe.style.backgroundSize = (box.width * loupeZoom) + 'px ' + (box.height * loupeZoom) + 'px';
+  loupe.style.left = (x - size / 2) + 'px';
+  loupe.style.top = (y - size / 2) + 'px';
+  loupe.style.backgroundPosition = (-(x * loupeZoom - size / 2)) + 'px ' +
+                                   (-(y * loupeZoom - size / 2)) + 'px';
+  loupe.style.display = 'block';
+  loupeClose.style.left = (x + size / 2 - 18) + 'px';
+  loupeClose.style.top = (y - size / 2 - 6) + 'px';
+  loupeClose.style.display = 'block';
 });
-поле.addEventListener('mouseleave', () => { лупа.style.display = 'none'; });
-поле.addEventListener('wheel', (событие) => {
-  if (!большой) { return; }
-  событие.preventDefault();
-  const шаг = событие.deltaY < 0 ? 0.5 : -0.5;
-  увеличение_тек = Math.min(10, Math.max(1, увеличение_тек + шаг));
-  ползунок.value = увеличение_тек;
-  обновить();
+viewArea.addEventListener('mouseleave', hideLoupe);
+viewArea.addEventListener('wheel', (event) => {
+  if (!bigView || !event.ctrlKey) { return; }
+  event.preventDefault();
+  const step = event.deltaY < 0 ? 0.5 : -0.5;
+  zoomLevel = Math.min(10, Math.max(1, zoomLevel + step));
+  zoomRange.value = zoomLevel;
+  refreshView();
 }, {passive: false});
-document.addEventListener('fullscreenchange', () => {
-  if (!document.fullscreenElement && большой) {
-    поле.classList.remove('большой');
-    большой = false;
-    кнопка_режима.classList.remove('выбран');
-    кнопка_режима.textContent = 'Большой вид';
-    обновить();
-  }
-});
-обновить();
+refreshView();
 </script></body></html>
 """
     разметка = разметка.replace("__КАРТИНКА__", данные)
@@ -366,7 +372,7 @@ document.addEventListener('fullscreenchange', () => {
 def zoom_crop(image, scale, shift_x, shift_y):
     """Вырезать область и растянуть её — так работает приближение.
 
-    scale    — во сколько раз приближаем (1 = весь лист);
+    scale    — во сколько раз приближаем (1 = весь sheet);
     shift_x  — сдвиг по ширине 0…1 (0 — левый край, 1 — правый);
     shift_y  — сдвиг по высоте 0…1 (0 — верх, 1 — низ).
     """
@@ -399,7 +405,7 @@ def tab_document():
             "**Фото на этом сервере не читается — так и задумано.** Здесь нет программы "
             "распознавания (Тесеракт): в облаке её не установить. Три рабочих пути:\n\n"
             "1. **Загрузите PDF с текстом** (не скан) — читается сразу.\n"
-            "2. **Вставьте текст вручную** — ниже, в поле «Вставить текст документа»: "
+            "2. **Вставьте текст вручную** — ниже, в viewArea «Вставить текст документа»: "
             "тогда работают поля, смысловая карточка, значимость и черновик акта.\n"
             "3. **Запустить на своём компьютере** — там работает полное чтение фото "
             "(`streamlit run app.py`)."
@@ -470,7 +476,7 @@ def tab_document():
         elif card["required"] != "—":
             st.success("Всё обязательное на месте")
         if result["blank"]["empty"]:
-            st.error("Похоже на **пустой бланк**: метки полей есть (%s), а значений нет."
+            st.error("Похоже на **пустой бланк**: метки viewAreaй есть (%s), а значений нет."
                      % ", ".join(result["blank"]["markers"]))
 
         st.markdown("### Поля документа")
@@ -531,30 +537,30 @@ def tab_document():
         else:
             if "turn" not in st.session_state:
                 st.session_state.turn = 0
-            поворот_кнопки = st.columns(3)
-            if поворот_кнопки[0].button("⟲ влево"):
+            rotate90_кнопки = st.columns(3)
+            if rotate90_кнопки[0].button("⟲ влево"):
                 st.session_state.turn = (st.session_state.turn + 270) % 360
-            if поворот_кнопки[1].button("⟳ вправо"):
+            if rotate90_кнопки[1].button("⟳ вправо"):
                 st.session_state.turn = (st.session_state.turn + 90) % 360
-            if поворот_кнопки[2].button("ровно"):
+            if rotate90_кнопки[2].button("ровно"):
                 st.session_state.turn = 0
-            st.caption("поворот: %d° · сервис уже развернул снимок «ногами вниз»"
+            st.caption("rotate90: %d° · сервис уже развернул снимок «ногами вниз»"
                        % st.session_state.turn)
 
             # приближение: разглядеть строчку, тени и нажим ручки
             scale = st.slider("Приближение (×)", 1.0, 8.0, 1.0, 0.5,
-                              help="1 — весь лист; 8 — самая крупная лупа. "
+                              help="1 — весь sheet; 8 — самая крупная лупа. "
                                    "Положение лупы задаётся ползунками ниже.")
             shift_x, shift_y = 0.5, 0.5
             if scale > 1.01:
                 ползунки = st.columns(2)
                 shift_x = ползунки[0].slider("Сдвиг по ширине", 0.0, 1.0, 0.5, 0.05)
                 shift_y = ползунки[1].slider("Сдвиг по высоте", 0.0, 1.0, 0.5, 0.05)
-                st.caption("лупа %.1f× · видно %.0f%% листа" % (scale, 100 / scale))
+                st.caption("лупа %.1f× · видно %.0f%% sheetа" % (scale, 100 / scale))
             резкая = document_image(path, scale, shift_x, shift_y) if scale > 1.01 else image
             st.image(резкая if резкая is not None else image, use_container_width=True,
                      caption="Оригинал: приближение %.1f×" % scale)
-            if st.checkbox("Лупа и инструменты (увеличение, инверсия, поворот)",
+            if st.checkbox("Лупа и инструменты (увеличение, toggleInvert, rotate90)",
                           value=True):
                 loupe_viewer(image)
 
@@ -564,7 +570,7 @@ def tab_laws():
     connected = engine_available()
     if not connected:
         st.info("Локальный движок Ollama на этой машине не отвечает. Покажу найденные пункты базы — "
-                "ответ большой модели появится, когда движок запущен (на своём компьютере).")
+                "ответ bigView модели появится, когда движок запущен (на своём компьютере).")
     question = st.text_input("Ваш вопрос", value=QUESTION_EXAMPLES[0])
     st.caption("Примеры: " + " · ".join(QUESTION_EXAMPLES[1:4]))
 
