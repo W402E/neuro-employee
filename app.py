@@ -72,7 +72,8 @@ def analyse_text(pages, name):
     full_text = "\n".join(page["text"] for page in pages)
     doc_type = core.document_type(full_text)
     fields = core.extract_fields(pages, doc_type)
-    fields += core.guess_fields(pages, fields, limit=10 if not fields else 4)
+    if len(fields) < 6:          # догадки — только когда правилами нашлось мало
+        fields += core.guess_fields(pages, fields, limit=6)
     fields = core.mark_values(fields)
     card = core.document_card(doc_type, fields, [])
     blank = core.empty_form(full_text, fields)
