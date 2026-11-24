@@ -30,6 +30,22 @@ import recognition         # noqa: E402
 
 st.set_page_config(page_title="Нейро-сотрудник", page_icon="🏢", layout="wide")
 
+DEMO_DOCUMENT = """АКТ № 47-ВК
+проверки состояния и функционирования вентиляционных каналов
+
+Объект: многоквартирный дом № 12 по ул. Ленина
+Дата составления: 20.03.2026
+Основание (договор): договор № 9 от 11.01.2026
+Заказчик: ООО «Управляющая компания Сервис-Пример»
+Исполнитель: ИП Пилюгин А. В., телефон 8 487 231-30-10
+Прибор: анемометр, заводской номер 1234, поверка до 14.02.2027
+Проверено каналов: 18
+Результат: тяга обеспечена во всех 18 каналах
+Выявленные дефекты: не выявлены
+Срок следующей проверки: август—сентябрь 2026
+Подпись исполнителя: имеется
+"""
+
 QUESTION_EXAMPLES = (
     "Как часто проверяют дымовые и вентиляционные каналы в многоквартирном доме?",
     "Кто обеспечивает надлежащее содержание дымовых и вентиляционных каналов?",
@@ -49,6 +65,22 @@ def engine_available():
             return response.status == 200
     except Exception:      # noqa: BLE001
         return False
+
+
+def analyse_text(pages, name):
+    """Разбор готового текста: вид, поля, коды, карточка, значимость."""
+    full_text = "\n".join(page["text"] for page in pages)
+    doc_type = core.document_type(full_text)
+    fields = core.extract_fields(pages, doc_type)
+    fields += core.guess_fields(pages, fields, limit=10 if not fields else 4)
+    fields = core.mark_values(fields)
+    card = core.document_card(doc_type, fields, [])
+    blank = core.empty_form(full_text, fields)
+    checks = codes.check_text(full_text)
+    abbreviations = glossary.find_in_text(full_text)
+    return {"pages": pages, "text": full_text, "type": doc_type, "fields": fields,
+            "card": card, "blank": blank, "checks": checks,
+            "abbreviations": abbreviations, "name": name, "codes": []}
 
 
 def read_document(uploaded):
@@ -135,43 +167,86 @@ def badge(kind):
 # --------------------------------------------------------------------------------- вкладки
 def tab_document():
     st.subheader("Документ")
-    uploaded = st.file_uploader("Загрузите PDF или фото документа (JPG, PNG)",
-                                type=["pdf", "jpg", "jpeg", "png", "tif", "tiff", "webp"])
-    if not uploaded:
-        st.info("Пока файла нет. Можно загрузить чек, наклейку роутера, заявление, накладную — "
-                "приложение скажет, что это за документ, куда он идёт в учёте и какие поля нашлись.")
+
+    ocr_ready = recognition.has_tesseract()
+    if not ocr_ready:
+        st.info(
+            "**Фото на этом сервере не читается — так и задумано.** Здесь нет программы "
+            "распознавания (Тесеракт): в облаке её не установить. Три рабочих пути:\n\n"
+            "1. **Загрузите PDF с текстом** (не скан) — читается сразу.\n"
+            "2. **Вставьте текст вручную** — ниже, в поле «Вставить текст документа»: "
+            "тогда работают поля, смысловая карточка, значимость и черновик акта.\n"
+            "3. **Запустить на своём компьютере** — там работает полное чтение фото "
+            "(`streamlit run app.py`)."
+        )
+
+    source = st.radio("Откуда берём документ",
+                      options=["Файл", "Вставить текст", "Показать пример"],
+                      horizontal=True)
+
+    pages, name, needs_ocr, path = [], "", False, None
+    if source == "Файл":
+        uploaded = st.file_uploader("Загрузите PDF или фото документа (JPG, PNG)",
+                                    type=["pdf", "jpg", "jpeg", "png", "tif", "tiff", "webp"])
+        if not uploaded:
+            st.caption("PDF с текстовым слоем читается в любом случае. Фото — только при "
+                       "локальном запуске, где установлен Тесеракт.")
+            return
+        with st.spinner("Читаю документ…"):
+            pages, name, needs_ocr, path = read_document(uploaded)
+    elif source == "Вставить текст":
+        pasted = st.text_area("Текст документа", height=220,
+                              placeholder="Вставьте сюда текст заявления, акта или чека")
+        if not pasted.strip():
+            st.caption("Пока пусто. Вставьте текст — и приложение разберёт его так же, как файл.")
+            return
+        pages, name = [{"page": 1, "text": pasted}], "текст, вставленный вручную"
+    else:
+        st.caption("Это встроенный пример акта проверки вентиляционных каналов — чтобы увидеть, "
+                   "как работает разбор, без подготовки файла.")
+        pages, name = [{"page": 1, "text": DEMO_DOCUMENT}], "пример: акт проверки вентканалов"
+
+    if not any(page["text"].strip() for page in pages):
+        st.error(
+            "**Текст не прочитан.** Причин две: в файле нет текстового слоя (это скан или фото) "
+            "и на этом сервере нет программы распознавания.\n\n"
+            "Что делать: 1) загрузите PDF с текстом; 2) вставьте текст вручную; "
+            "3) запустите приложение на своём компьютере — там фото читается."
+        )
+        image = preview_png(path) if path else None
+        if image is not None:
+            st.image(image, caption="Загруженный снимок: сверьте глазами", use_container_width=True)
         return
 
-    with st.spinner("Читаю документ…"):
-        pages, name, needs_ocr, path = read_document(uploaded)
-        full_text = "\n".join(page["text"] for page in pages)
-        doc_type = core.document_type(full_text)
-        fields = core.extract_fields(pages, doc_type)
-        found_codes = codes.find_codes(path)
-        fields += codes.parse_codes(found_codes)
-        fields += core.guess_fields(pages, fields, limit=10 if not fields else 4)
-        fields = core.mark_values(fields)
-        card = core.document_card(doc_type, fields, found_codes)
-        blank = core.empty_form(full_text, fields)
-        checks = codes.check_text(full_text)
-        abbreviations = glossary.find_in_text(full_text)
+    with st.spinner("Разбираю документ…"):
+        result = analyse_text(pages, name)
+        if path:
+            found = codes.find_codes(path)
+            extra = codes.parse_codes(found)
+            if extra:
+                result["fields"] = core.mark_values(result["fields"] + extra)
+                result["codes"] = found
+                result["card"] = core.document_card(result["type"], result["fields"], found)
+        if needs_ocr:
+            st.warning("В файле нет текстового слоя — читал распознаванием, качество зависит "
+                       "от снимка.")
 
     left, right = st.columns((3, 2))
+    fields = result["fields"]
+    card = result["card"]
 
     with left:
-        if needs_ocr:
-            st.warning("В файле нет текстового слоя и Тесеракт не прочитал — проверьте снимок.")
         st.markdown("### Смысл документа")
-        st.markdown("**Вид документа:** %s" % doc_type)
+        st.markdown("**Вид документа:** %s" % result["type"])
         st.markdown("**Куда идёт в учёте:** %s — %s" % (card["destination"], card["action"]))
         st.markdown("**Обязательно должно быть:** %s" % card["required"])
         if card["missing"]:
             st.error("Не хватает: %s" % ", ".join(card["missing"]))
-        else:
+        elif card["required"] != "—":
             st.success("Всё обязательное на месте")
-        if blank["empty"]:
+        if result["blank"]["empty"]:
             st.error("Похоже на **пустой бланк**: метки полей есть (%s), а значений нет."
-                     % ", ".join(blank["markers"]))
+                     % ", ".join(result["blank"]["markers"]))
 
         st.markdown("### Поля документа")
         masks = st.multiselect("Что заменить маской в акте и реестре:",
@@ -181,10 +256,11 @@ def tab_document():
         if fields:
             table = []
             for item in fields:
+                hidden = item.get("kind") in masks
                 table.append({
                     "Поле": ("[" + item.get("label", "") + "] " if item.get("label") else "") + item["field"],
                     "Значение": (core.mask_value(item["value"], item.get("kind"))
-                                 if item.get("kind") in masks else item["value"]),
+                                 if hidden else item["value"]),
                     "Значимость": item.get("label", "—"),
                     "Где": "стр. %s, строка %s" % (item.get("page"), item.get("line")),
                     "Как найдено": item.get("how", ""),
@@ -194,27 +270,28 @@ def tab_document():
             if counts:
                 summary = " · ".join("%s: %d" % (core.SENSITIVITY[kind]["label"], count)
                                      for kind, count in counts.items())
-                st.warning("В документе значимые значения — %s. За пределы контура такое "
-                           "выносить нельзя без обезличивания (152-ФЗ, ст. 3, п. 9)." % summary)
+                st.warning("В документе значимые значения — %s. За пределы контура такое выносить "
+                           "нельзя без обезличивания (152-ФЗ, ст. 3, п. 9)." % summary)
         else:
             st.info("Полей правилами не нашлось. Ниже — текст, который прочитала система.")
 
-        if checks:
+        if result["checks"]:
             st.markdown("### Сверка кодов по классификаторам")
             st.dataframe([{"Код": item["code"], "Значение": item["value"],
                            "Проверка": item["verdict"],
                            "Как проверено": "арифметика" if item["reliable"] else "формат",
-                           "Смысл": item["meaning"]} for item in checks],
+                           "Смысл": item["meaning"]} for item in result["checks"]],
                          use_container_width=True, hide_index=True)
 
-        if abbreviations:
+        if result["abbreviations"]:
             st.markdown("### Сокращения в документе")
-            for key in abbreviations:
+            for key in result["abbreviations"]:
                 st.markdown("- **%s** — %s" % (key, glossary.tooltip(key)))
 
         with st.expander("Что прочитано с документа (%d знаков, %d цифр)"
-                         % (len(full_text), sum(1 for symbol in full_text if symbol.isdigit()))):
-            st.code(full_text[:4000] or "текст не распознан")
+                         % (len(result["text"]),
+                            sum(1 for symbol in result["text"] if symbol.isdigit()))):
+            st.code(result["text"][:4000] or "текст не распознан")
 
         act = core.build_act_text(fields, name, masks)
         st.download_button("Скачать черновик акта (TXT)", act,
@@ -222,9 +299,10 @@ def tab_document():
 
     with right:
         st.markdown("### Оригинал документа")
-        image = preview_png(path)
+        image = preview_png(path) if path else None
         if image is None:
-            st.info("Для этого типа файла картинку не показываем — смотрите текст слева.")
+            st.info("Показан текст без картинки: для вставленного текста и примера "
+                    "оригинала нет.")
         else:
             if "turn" not in st.session_state:
                 st.session_state.turn = 0
@@ -235,10 +313,8 @@ def tab_document():
                 st.session_state.turn = (st.session_state.turn + 90) % 360
             if third.button("ровно"):
                 st.session_state.turn = 0
-            st.caption("поворот: %d° · сервис уже развернул снимок «ногами вниз»"
-                       % st.session_state.turn)
-            st.image(image, use_container_width=True,
-                     caption="Оригинал: сверяйте с полями слева")
+            st.caption("поворот: %d°" % st.session_state.turn)
+            st.image(image, use_container_width=True, caption="Оригинал: сверяйте с полями слева")
 
 
 def tab_laws():
