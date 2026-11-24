@@ -183,12 +183,12 @@ def check_code(name, value):
 
 
 CODE_LABELS = (
-    ("ИНН", r"(?i)\bИНН[^\d]{0,6}(\d{10}|\d{12})"),
+    ("ИНН", r"(?i)\bИНН[^\d]{0,8}(\d[\d\s]{8,14}\d)"),
     ("СНИЛС", r"(?i)\bСНИЛС[^\d]{0,6}(\d{3}[-\s]?\d{3}[-\s]?\d{3}[-\s]?\d{2})"),
     ("ОГРНИП", r"(?i)\bОГРНИП[^\d]{0,6}(\d{15})"),
     ("ОГРН", r"(?i)\bОГРН[^\d]{0,6}(\d{13})"),
-    ("КПП", r"(?i)\bКПП[^\w]{0,6}(\d{4}[0-9A-Za-z]{2}\d{3})"),
-    ("БИК", r"(?i)\bБИК[^\d]{0,6}(\d{9})"),
+    ("КПП", r"(?i)\bКПП[^\w]{0,8}(\d{4}[0-9A-Za-z]{2}\d{3})"),
+    ("БИК", r"(?i)\bБИК[^\d]{0,8}(\d[\d\s]{7,9}\d)"),
     ("ОКУД", r"(?i)\bОКУД[^\d]{0,6}(\d{7})"),
     ("ОКПО", r"(?i)\bОКПО[^\d]{0,6}(\d{8}|\d{10})"),
     ("РН ККТ", r"(?i)\bРН\s?ККТ[^\d]{0,6}(\d{14})"),
@@ -227,8 +227,44 @@ def barcode_country(value):
     return ""
 
 
+def _variants(image):
+    """Подготовка картинки: как есть, в сером, увеличенная, бинаризованная, инверсия."""
+    try:
+        import cv2
+    except Exception:      # noqa: BLE001
+        return [image]
+    готовые = [image]
+    try:
+        серый = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        готовые.append(серый)
+        длинная = max(серый.shape[:2])
+        if длинная < 2200:
+            factor = 2.0
+            готовые.append(cv2.resize(серый, None, fx=factor, fy=factor,
+                                      interpolation=cv2.INTER_CUBIC))
+        _, бинарь = cv2.threshold(серый, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        готовые.append(бинарь)
+        готовые.append(cv2.bitwise_not(бинарь))
+    except Exception:      # noqa: BLE001
+        pass
+    return готовые
+
+
 def _decode_image(image):
     """QR и штрих-коды на одном изображении (zxing-cpp, запасной путь — OpenCV)."""
+    found = []
+    for variant in _variants(image):
+        this = _decode_one(variant)
+        for item in this:
+            if item not in found:
+                found.append(item)
+        if found:
+            return found
+    return found
+
+
+def _decode_one(image):
+    """Один проход по одной картинке, без подготовки."""
     found = []
     try:
         import zxingcpp
@@ -275,9 +311,10 @@ def find_codes(path, max_pages=6):
             document = pymupdf.open(path)
             try:
                 for number in range(1, min(len(document), max_pages) + 1):
-                    payloads.append(document[number - 1]
-                                    .get_pixmap(matrix=pymupdf.Matrix(2.0, 2.0))
-                                    .tobytes("png"))
+                    for zoom in (2.0, 4.0):        # мелкий QR берётся только на большом увеличении
+                        payloads.append(document[number - 1]
+                                        .get_pixmap(matrix=pymupdf.Matrix(zoom, zoom))
+                                        .tobytes("png"))
             finally:
                 document.close()
         else:
