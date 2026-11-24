@@ -199,9 +199,10 @@ def document_image(path, scale=1.0, shift_x=0.5, shift_y=0.5):
 
 
 def loupe_viewer(image, height=760):
-    """Документ: в обычном виде — лист и лупа, в большом — лист и все инструменты.
+    """Документ и две кнопки: «Лупа» (колесо меняет кратность) и «Открыть в новой вкладке».
 
-    Имена в скрипте латиницей, подписи для человека по-русски.
+    В новой вкладке — полноценный просмотр с инструментами: увеличение, инверсия, поворот,
+    сброс, скачать, во весь экран. Имена в скрипте латиницей, подписи по-русски.
     """
     try:
         import base64                       # noqa: PLC0415
@@ -227,18 +228,15 @@ def loupe_viewer(image, height=760):
          background:#f7f9fc; }
   .bar { display:flex; gap:6px; align-items:center; padding:6px 8px; background:#eef4fa;
          border:1px solid #d3dfec; border-radius:8px 8px 0 0; flex-wrap:wrap; }
-  .bar button { padding:5px 10px; border:1px solid #b9c7d8; background:#fff; border-radius:6px;
-                cursor:pointer; font-size:13px; }
+  .bar button { padding:6px 13px; border:1px solid #8fa3ba; background:#fff; border-radius:6px;
+                cursor:pointer; font-size:14px; font-weight:600; }
   .bar button.on { background:#1f5f9e; color:#fff; border-color:#1f5f9e; }
   .bar button.main { background:#1f5f9e; color:#fff; border-color:#1f5f9e; }
-  .bar input[type=range] { width:120px; }
   .status { font-size:13px; color:#41536a; margin-left:auto; }
-  .view { position:relative; height:calc(100% - 46px); overflow:auto; background:#fff;
+  .view { position:relative; height:calc(100% - 48px); overflow:auto; background:#fff;
           border:1px solid #d3dfec; border-top:0; border-radius:0 0 8px 8px; }
-  .view.big { position:fixed; inset:0; height:auto; border-radius:0; z-index:9999; }
-  img.sheet { display:block; width:100%; transform-origin:top left; }
-  .view.big img.sheet { width:auto; max-width:none; }
-  .loupe { position:absolute; width:180px; height:180px; border-radius:50%;
+  img.sheet { display:block; width:100%; }
+  .loupe { position:absolute; width:190px; height:190px; border-radius:50%;
            border:3px solid #1f5f9e; box-shadow:0 6px 16px rgba(20,40,80,.35);
            background-repeat:no-repeat; background-color:#fff; pointer-events:none;
            display:none; z-index:20; }
@@ -249,20 +247,8 @@ def loupe_viewer(image, height=760):
 </style></head><body>
 <div style="height:100%">
   <div class="bar">
-    <span id="compactTools">
-      <button id="loupeBtn" onclick="toggleLoupe()">Лупа</button>
-      <button class="main" onclick="enterBig()">во весь экран</button>
-    </span>
-    <span id="bigTools" style="display:none">
-      <input type="range" id="zoomRange" min="1" max="10" step="0.5" value="2"
-             oninput="setZoom(this.value)" title="увеличение листа">
-      <button onclick="toggleInvert()">инверсия</button>
-      <button onclick="rotate90()">поворот 90°</button>
-      <button onclick="resetAll()">сброс</button>
-      <button onclick="openInNewTab()">открыть в новой вкладке</button>
-      <button onclick="downloadImage()">скачать</button>
-      <button class="main" onclick="exitBig()">свернуть</button>
-    </span>
+    <button id="loupeBtn" onclick="toggleLoupe()">Лупа</button>
+    <button class="main" onclick="openInNewTab()">Открыть в новой вкладке</button>
     <span class="status" id="status">обычный вид</span>
   </div>
   <div class="view" id="viewArea">
@@ -270,82 +256,38 @@ def loupe_viewer(image, height=760):
     <div class="loupe" id="loupe"></div>
     <div class="closer" id="loupeClose" onclick="loupeOff()" title="Убрать лупу">✕</div>
   </div>
-  <div class="hint" id="hint">Обычный вид: документ на всю область, кнопка «Лупа» включает кружок —
-    ведите курсор по листу, колесо мыши меняет кратность, ✕ убирает лупу. Кнопка
-    «во весь экран» открывает большой режим: там увеличение ползунком, инструменты и прокрутка.</div>
+  <div class="hint" id="hint">Документ занимает всю область. Кнопка «Лупа» включает кружок:
+    ведите курсор по листу, <b>колесо мыши меняет кратность</b> (2…10×), ✕ убирает лупу.
+    Кнопка «Открыть в новой вкладке» даёт отдельную страницу браузера со всеми инструментами.</div>
 </div>
 <script>
-let loupeZoom = 3, zoomLevel = 1, angle = 0, inverted = false, bigView = false, loupeOn = false;
+let loupeZoom = 3, loupeOn = false;
 const sheet = document.getElementById('sheet');
 const loupe = document.getElementById('loupe');
 const loupeClose = document.getElementById('loupeClose');
 const viewArea = document.getElementById('viewArea');
 const statusText = document.getElementById('status');
 const loupeBtn = document.getElementById('loupeBtn');
-const zoomRange = document.getElementById('zoomRange');
 
 function refreshView() {
-  sheet.style.transform = 'rotate(' + angle + 'deg) scale(' + zoomLevel + ')';
-  sheet.style.filter = inverted ? 'invert(1)' : 'none';
   loupeBtn.classList.toggle('on', loupeOn);
-  document.getElementById('compactTools').style.display = bigView ? 'none' : 'inline';
-  document.getElementById('bigTools').style.display = bigView ? 'inline' : 'none';
-  document.getElementById('hint').style.display = bigView ? 'none' : 'block';
-  if (bigView || !loupeOn) { hideLoupe(); }
-  let текст_режима = 'обычный вид';
-  if (bigView) { текст_режима = 'большой вид · увеличение ' + zoomLevel + '×'; }
-  else if (loupeOn) { текст_режима = 'лупа ' + loupeZoom + '×'; }
-  statusText.textContent = текст_режима
-    + (angle ? ' · поворот ' + angle + '°' : '')
-    + (inverted ? ' · инверсия' : '');
+  if (!loupeOn) { hideLoupe(); }
+  statusText.textContent = loupeOn ? ('лупа ' + loupeZoom + '× · колесо меняет кратность')
+                                   : 'обычный вид · нажмите «Лупа»';
 }
 function hideLoupe() { loupe.style.display = 'none'; loupeClose.style.display = 'none'; }
 function toggleLoupe() { loupeOn = !loupeOn; refreshView(); }
-function loupeOff() { loupeOn = false; hideLoupe(); refreshView(); }
-function loupeStep(step) { loupeZoom = Math.min(10, Math.max(2, loupeZoom + step)); refreshView(); }
-function toggleInvert() { inverted = !inverted; refreshView(); }
-function rotate90() { angle = (angle + 90) % 360; refreshView(); }
-function setZoom(value) { zoomLevel = parseFloat(value); refreshView(); }
-function resetAll() { loupeZoom = 3; zoomLevel = 2; angle = 0; inverted = false;
-                      zoomRange.value = 2; refreshView(); }
-function enterBig() {
-  bigView = true;
-  viewArea.classList.add('big');
-  zoomLevel = 2;
-  zoomRange.value = 2;
-  loupeOn = false;
-  refreshView();
-}
-function exitBig() {
-  bigView = false;
-  viewArea.classList.remove('big');
-  zoomLevel = 1;
-  refreshView();
-}
-function openInNewTab() {
-  const win = window.open('', '_blank');
-  if (!win) { return; }
-  win.document.write('<title>Оригинал документа</title>' +
-    '<body style="margin:0;background:#333;display:flex;justify-content:center">' +
-    '<img src="' + sheet.src + '" style="width:100%;max-width:none">' +
-    '<p style="position:fixed;bottom:6px;left:8px;color:#fff;font:13px sans-serif">' +
-    'Ctrl + колесо мыши — масштаб браузера.</p></body>');
-  win.document.close();
-}
-function downloadImage() {
-  const link = document.createElement('a');
-  link.href = sheet.src;
-  link.download = 'документ.png';
-  link.click();
-}
+function loupeOff() { loupeOn = false; refreshView(); }
+
 viewArea.addEventListener('mousemove', (event) => {
-  if (!loupeOn || bigView) { return; }
+  if (!loupeOn) { return; }
   const box = sheet.getBoundingClientRect();
   if (box.width < 10 || box.height < 10) { return; }
   const x = event.clientX - box.left;
   const y = event.clientY - box.top;
   if (x < 0 || y < 0 || x > box.width || y > box.height) { hideLoupe(); return; }
-  const size = 180;
+  const size = 190;
+  loupe.style.backgroundImage = 'url("' + sheet.src + '")';        // фон лупы
   loupe.style.backgroundSize = (box.width * loupeZoom) + 'px ' + (box.height * loupeZoom) + 'px';
   loupe.style.left = (x - size / 2) + 'px';
   loupe.style.top = (y - size / 2) + 'px';
@@ -358,13 +300,83 @@ viewArea.addEventListener('mousemove', (event) => {
 });
 viewArea.addEventListener('mouseleave', hideLoupe);
 viewArea.addEventListener('wheel', (event) => {
-  if (!bigView || !event.ctrlKey) { return; }
+  if (!loupeOn) { return; }
   event.preventDefault();
-  const step = event.deltaY < 0 ? 0.5 : -0.5;
-  zoomLevel = Math.min(10, Math.max(1, zoomLevel + step));
-  zoomRange.value = zoomLevel;
-  refreshView();
+  loupeZoom = Math.min(10, Math.max(2, loupeZoom + (event.deltaY < 0 ? 0.5 : -0.5)));
+  statusText.textContent = 'лупа ' + loupeZoom + '× · колесо меняет кратность';
 }, {passive: false});
+
+function openInNewTab() {
+  const окно = window.open('', '_blank');
+  if (!окно) { alert('Браузер заблокировал новую вкладку — разрешите всплывающие окна.'); return; }
+  окно.document.write(`<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
+<title>Оригинал документа — просмотр</title>
+<style>
+ body { margin:0; font-family:"Segoe UI", Arial, sans-serif; background:#20242a; color:#fff; }
+ .tools { position:sticky; top:0; display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+          padding:8px 10px; background:#1f242b; border-bottom:1px solid #3a4048; z-index:5; }
+ .tools button { padding:6px 13px; border:1px solid #6b7a8c; background:#3b4552; color:#fff;
+                 border-radius:6px; cursor:pointer; font-size:14px; font-weight:600; }
+ .tools button:hover { background:#3a4553; }
+ .tools input[type=range] { width:160px; }
+ .tools .подпись { font-size:14px; color:#fff; margin-left:auto; font-weight:600; }
+ .holder { padding:10px; display:flex; justify-content:center; }
+ img.doc { transition:transform .12s; transform-origin:top left; background:#fff; }
+</style></head><body>
+<div class="tools">
+  <button onclick="zoomStep(-1)">−</button>
+  <button onclick="zoomStep(1)">+</button>
+  <input type="range" id="zoom" min="1" max="10" step="0.5" value="1" oninput="setZoom(this.value)">
+  <button onclick="invert()">инверсия</button>
+  <button onclick="turn()">поворот 90°</button>
+  <button onclick="resetAll()">сброс</button>
+  <button onclick="fullScreen()">во весь экран</button>
+  <button onclick="save()">скачать</button>
+  <span class="подпись" id="info">увеличение 1×</span>
+</div>
+<div class="holder" id="holder">
+  <img class="doc" id="doc" src="__ИСТОЧНИК__" alt="оригинал документа">
+</div>
+<script>
+let zoomLevel = 1, angle = 0, inverted = false;
+const doc = document.getElementById('doc');
+const info = document.getElementById('info');
+const holder = document.getElementById('holder');
+function update() {
+  doc.style.transform = 'rotate(' + angle + 'deg) scale(' + zoomLevel + ')';
+  doc.style.filter = inverted ? 'invert(1)' : 'none';
+  info.textContent = 'увеличение ' + zoomLevel + '×' + (angle ? ' · поворот ' + angle + '°' : '')
+                     + (inverted ? ' · инверсия' : '');
+}
+function zoomStep(step) {
+  zoomLevel = Math.min(10, Math.max(1, zoomLevel + step));
+  document.getElementById('zoom').value = zoomLevel;
+  update();
+}
+function setZoom(value) { zoomLevel = parseFloat(value); update(); }
+function invert() { inverted = !inverted; update(); }
+function turn() { angle = (angle + 90) % 360; update(); }
+function resetAll() { zoomLevel = 1; angle = 0; inverted = false;
+                      document.getElementById('zoom').value = 1; update(); }
+function fullScreen() {
+  if (document.fullscreenElement) { document.exitFullscreen(); }
+  else { holder.requestFullscreen().catch(() => {}); }
+}
+function save() {
+  const link = document.createElement('a');
+  link.href = doc.src;
+  link.download = 'документ.png';
+  link.click();
+}
+document.addEventListener('wheel', (event) => {
+  if (!event.ctrlKey) { return; }
+  event.preventDefault();
+  zoomStep(event.deltaY < 0 ? 0.5 : -0.5);
+}, {passive: false});
+update();
+</script></body></html>`);
+  окно.document.close();
+}
 refreshView();
 </script></body></html>
 """
