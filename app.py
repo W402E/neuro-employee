@@ -118,43 +118,90 @@ def read_document(uploaded):
     return pages, uploaded.name, needs_ocr, path
 
 
-def preview_png(path):
-    """Картинка оригинала для показа (PDF — первая страница)."""
+def document_image(path, scale=1.0, shift_x=0.5, shift_y=0.5):
+    """Картинка документа для показа.
+
+    scale  — приближение: 1 = весь лист; 8 = узкая полоса, но в полном разрешении;
+    shift_x, shift_y — положение лупы (0…1) по ширине и высоте.
+
+    Для PDF область рендерится заново с большим увеличением — поэтому буквы остаются
+    резкими, а не растянутыми. Для фото берётся исходный файл без уменьшения.
+    """
     try:
         import cv2
         import numpy as np
         import pymupdf
+
+        доля = 1.0 / max(scale, 1.0)                 # какую часть листа показываем
+        левый_край = min(max(shift_x - доля / 2, 0.0), 1.0 - доля)
+        верхний_край = min(max(shift_y - доля / 2, 0.0), 1.0 - доля)
+
         if str(path).lower().endswith(".pdf"):
             document = pymupdf.open(path)
             try:
-                payload = document[0].get_pixmap(matrix=pymupdf.Matrix(1.5, 1.5)).tobytes("png")
+                страница = document[0]
+                рамка = страница.rect
+                область = pymupdf.Rect(
+                    рамка.x0 + рамка.width * левый_край,
+                    рамка.y0 + рамка.height * верхний_край,
+                    рамка.x0 + рамка.width * (левый_край + доля),
+                    рамка.y0 + рамка.height * (верхний_край + доля))
+                # увеличение подбираем так, чтобы картинка была около 1600 точек
+                точек = 1600.0
+                увеличение = точек / max(1.0, max(область.width, область.height))
+                увеличение = min(max(увеличение, 2.0), 12.0)
+                поток = страница.get_pixmap(matrix=pymupdf.Matrix(увеличение, увеличение),
+                                           clip=область).tobytes("png")
             finally:
                 document.close()
         else:
-            with open(path, "rb") as handle:
-                payload = handle.read()
-        image = cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_COLOR)
-        if image is None:
+            with open(path, "rb") as файл:
+                поток = файл.read()
+
+        картинка = cv2.imdecode(np.frombuffer(поток, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if картинка is None:
             return None
-        angle = recognition.orientation_angle(_png_on_disk(payload))
-        if angle in (90, 180, 270):
-            turns = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
-                     270: cv2.ROTATE_90_COUNTERCLOCKWISE}
-            image = cv2.rotate(image, turns[angle])
-        longest = max(image.shape[:2])
-        if longest > 1400:
-            factor = 1400 / longest
-            image = cv2.resize(image, (int(image.shape[1] * factor), int(image.shape[0] * factor)))
-        return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+        if not str(path).lower().endswith(".pdf"):
+            # фото: вырезаем область из оригинала, без растяжения
+            высота, ширина = картинка.shape[:2]
+            x0 = int(ширина * левый_край)
+            y0 = int(высота * верхний_край)
+            x1 = int(ширина * (левый_край + доля))
+            y1 = int(высота * (верхний_край + доля))
+            картинка = картинка[y0:y1, x0:x1]
+            длинная = max(картинка.shape[:2])
+            if длинная > 1800:
+                коэффициент = 1800 / длинная
+                картинка = cv2.resize(картинка, (int(картинка.shape[1] * коэффициент),
+                                                 int(картинка.shape[0] * коэффициент)))
+
+        угол = recognition.orientation_angle(_png_on_disk(поток))
+        if угол in (90, 180, 270):
+            повороты = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
+                        270: cv2.ROTATE_90_COUNTERCLOCKWISE}
+            картинка = cv2.rotate(картинка, повороты[угол])
+        return cv2.cvtColor(картинка, cv2.COLOR_BGR2RGB)
     except Exception:      # noqa: BLE001
         return None
 
 
-def _png_on_disk(payload):
-    handle, path = tempfile.mkstemp(suffix=".png")
-    with os.fdopen(handle, "wb") as file_handle:
-        file_handle.write(payload)
-    return path
+def zoom_crop(image, scale, shift_x, shift_y):
+    """Вырезать область и растянуть её — так работает приближение.
+
+    scale    — во сколько раз приближаем (1 = весь лист);
+    shift_x  — сдвиг по ширине 0…1 (0 — левый край, 1 — правый);
+    shift_y  — сдвиг по высоте 0…1 (0 — верх, 1 — низ).
+    """
+    import cv2
+    if scale <= 1.01:
+        return image
+    height, width = image.shape[:2]
+    window_w, window_h = max(64, int(width / scale)), max(64, int(height / scale))
+    left = int((width - window_w) * min(max(shift_x, 0.0), 1.0))
+    top = int((height - window_h) * min(max(shift_y, 0.0), 1.0))
+    crop = image[top:top + window_h, left:left + window_w]
+    return cv2.resize(crop, (width, height), interpolation=cv2.INTER_CUBIC)
 
 
 def badge(kind):
@@ -214,7 +261,7 @@ def tab_document():
             "Что делать: 1) загрузите PDF с текстом; 2) вставьте текст вручную; "
             "3) запустите приложение на своём компьютере — там фото читается."
         )
-        image = preview_png(path) if path else None
+        image = document_image(path) if path else None
         if image is not None:
             st.image(image, caption="Загруженный снимок: сверьте глазами", use_container_width=True)
         return
@@ -300,22 +347,36 @@ def tab_document():
 
     with right:
         st.markdown("### Оригинал документа")
-        image = preview_png(path) if path else None
+        image = document_image(path) if path else None
         if image is None:
             st.info("Показан текст без картинки: для вставленного текста и примера "
                     "оригинала нет.")
         else:
             if "turn" not in st.session_state:
                 st.session_state.turn = 0
-            first, second, third = st.columns(3)
-            if first.button("⟲ влево"):
+            поворот_кнопки = st.columns(3)
+            if поворот_кнопки[0].button("⟲ влево"):
                 st.session_state.turn = (st.session_state.turn + 270) % 360
-            if second.button("⟳ вправо"):
+            if поворот_кнопки[1].button("⟳ вправо"):
                 st.session_state.turn = (st.session_state.turn + 90) % 360
-            if third.button("ровно"):
+            if поворот_кнопки[2].button("ровно"):
                 st.session_state.turn = 0
-            st.caption("поворот: %d°" % st.session_state.turn)
-            st.image(image, use_container_width=True, caption="Оригинал: сверяйте с полями слева")
+            st.caption("поворот: %d° · сервис уже развернул снимок «ногами вниз»"
+                       % st.session_state.turn)
+
+            # приближение: разглядеть строчку, тени и нажим ручки
+            scale = st.slider("Приближение (×)", 1.0, 8.0, 1.0, 0.5,
+                              help="1 — весь лист; 8 — самая крупная лупа. "
+                                   "Положение лупы задаётся ползунками ниже.")
+            shift_x, shift_y = 0.5, 0.5
+            if scale > 1.01:
+                ползунки = st.columns(2)
+                shift_x = ползунки[0].slider("Сдвиг по ширине", 0.0, 1.0, 0.5, 0.05)
+                shift_y = ползунки[1].slider("Сдвиг по высоте", 0.0, 1.0, 0.5, 0.05)
+                st.caption("лупа %.1f× · видно %.0f%% листа" % (scale, 100 / scale))
+            резкая = document_image(path, scale, shift_x, shift_y) if scale > 1.01 else image
+            st.image(резкая if резкая is not None else image, use_container_width=True,
+                     caption="Оригинал: приближение %.1f× · сверяйте с полями слева" % scale)
 
 
 def tab_laws():
