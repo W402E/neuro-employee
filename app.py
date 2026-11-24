@@ -198,10 +198,10 @@ def document_image(path, scale=1.0, shift_x=0.5, shift_y=0.5):
 
 
 
-def loupe_viewer(image, height=820):
-    """Документ с лупой по кнопке и большим видом с инструментами.
+def loupe_viewer(image, height=760):
+    """Документ: в обычном виде — лист и лупа, в большом — лист и все инструменты.
 
-    Имена в скрипте — латиницей (требование к коду), подписи для человека — по-русски.
+    Имена в скрипте латиницей, подписи для человека по-русски.
     """
     try:
         import base64                       # noqa: PLC0415
@@ -216,26 +216,27 @@ def loupe_viewer(image, height=820):
         Image.fromarray(картинка[:, :, :3].astype("uint8")).save(буфер, format="PNG")
         данные = base64.b64encode(буфер.getvalue()).decode("ascii")
     except Exception as ошибка:      # noqa: BLE001
-        st.info("Лупа не собралась: %s. Смотрите обычный просмотр выше — он работает."
-                % type(ошибка).__name__)
+        st.info("Лупа не собралась: %s. Смотрите просмотр выше." % type(ошибка).__name__)
         return
 
     разметка = """
 <!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
 <style>
   * { box-sizing: border-box; }
-  body { margin:0; font-family:"Segoe UI", Arial, sans-serif; color:#15233a; background:#f7f9fc; }
+  body { margin:0; height:100%; font-family:"Segoe UI", Arial, sans-serif; color:#15233a;
+         background:#f7f9fc; }
   .bar { display:flex; gap:6px; align-items:center; padding:6px 8px; background:#eef4fa;
          border:1px solid #d3dfec; border-radius:8px 8px 0 0; flex-wrap:wrap; }
   .bar button { padding:5px 10px; border:1px solid #b9c7d8; background:#fff; border-radius:6px;
                 cursor:pointer; font-size:13px; }
   .bar button.on { background:#1f5f9e; color:#fff; border-color:#1f5f9e; }
+  .bar button.main { background:#1f5f9e; color:#fff; border-color:#1f5f9e; }
   .bar input[type=range] { width:120px; }
   .status { font-size:13px; color:#41536a; margin-left:auto; }
   .view { position:relative; height:calc(100% - 46px); overflow:auto; background:#fff;
           border:1px solid #d3dfec; border-top:0; border-radius:0 0 8px 8px; }
   .view.big { position:fixed; inset:0; height:auto; border-radius:0; z-index:9999; }
-  img.sheet { display:block; width:100%; transition:transform .12s; transform-origin:top left; }
+  img.sheet { display:block; width:100%; transform-origin:top left; }
   .view.big img.sheet { width:auto; max-width:none; }
   .loupe { position:absolute; width:180px; height:180px; border-radius:50%;
            border:3px solid #1f5f9e; box-shadow:0 6px 16px rgba(20,40,80,.35);
@@ -248,17 +249,20 @@ def loupe_viewer(image, height=820):
 </style></head><body>
 <div style="height:100%">
   <div class="bar">
-    <button id="loupeBtn" onclick="toggleLoupe()">Лупа</button>
-    <button id="bigBtn" onclick="toggleBig()">Большой вид</button>
-    <button id="minusBtn" onclick="loupeStep(-1)">− лупа</button>
-    <button id="plusBtn" onclick="loupeStep(1)">+ лупа</button>
-    <input type="range" id="zoomRange" min="1" max="10" step="0.5" value="1"
-           oninput="setZoom(this.value)" title="увеличение листа">
-    <button onclick="toggleInvert()">инверсия</button>
-    <button onclick="rotate90()">поворот 90°</button>
-    <button onclick="resetAll()">сброс</button>
-    <button onclick="openInNewTab()">открыть в новой вкладке</button>
-    <button onclick="downloadImage()">скачать</button>
+    <span id="compactTools">
+      <button id="loupeBtn" onclick="toggleLoupe()">Лупа</button>
+      <button class="main" onclick="enterBig()">во весь экран</button>
+    </span>
+    <span id="bigTools" style="display:none">
+      <input type="range" id="zoomRange" min="1" max="10" step="0.5" value="2"
+             oninput="setZoom(this.value)" title="увеличение листа">
+      <button onclick="toggleInvert()">инверсия</button>
+      <button onclick="rotate90()">поворот 90°</button>
+      <button onclick="resetAll()">сброс</button>
+      <button onclick="openInNewTab()">открыть в новой вкладке</button>
+      <button onclick="downloadImage()">скачать</button>
+      <button class="main" onclick="exitBig()">свернуть</button>
+    </span>
     <span class="status" id="status">обычный вид</span>
   </div>
   <div class="view" id="viewArea">
@@ -266,10 +270,9 @@ def loupe_viewer(image, height=820):
     <div class="loupe" id="loupe"></div>
     <div class="closer" id="loupeClose" onclick="loupeOff()" title="Убрать лупу">✕</div>
   </div>
-  <div class="hint" id="hint">Обычный вид: нажмите «Лупа», наведите курсор на документ — рядом
-    появится кружок с увеличенным куском, колесо мыши меняет кратность, ✕ убирает лупу.
-    «Большой вид» открывает документ на всё поле: там увеличение задаёт ползунок, а по листу
-    двигаются прокруткой. «инверсия» помогает на бледных сканах.</div>
+  <div class="hint" id="hint">Обычный вид: документ на всю область, кнопка «Лупа» включает кружок —
+    ведите курсор по листу, колесо мыши меняет кратность, ✕ убирает лупу. Кнопка
+    «во весь экран» открывает большой режим: там увеличение ползунком, инструменты и прокрутка.</div>
 </div>
 <script>
 let loupeZoom = 3, zoomLevel = 1, angle = 0, inverted = false, bigView = false, loupeOn = false;
@@ -279,22 +282,20 @@ const loupeClose = document.getElementById('loupeClose');
 const viewArea = document.getElementById('viewArea');
 const statusText = document.getElementById('status');
 const loupeBtn = document.getElementById('loupeBtn');
-const bigBtn = document.getElementById('bigBtn');
 const zoomRange = document.getElementById('zoomRange');
 
 function refreshView() {
   sheet.style.transform = 'rotate(' + angle + 'deg) scale(' + zoomLevel + ')';
   sheet.style.filter = inverted ? 'invert(1)' : 'none';
   loupeBtn.classList.toggle('on', loupeOn);
-  bigBtn.classList.toggle('on', bigView);
-  document.getElementById('minusBtn').style.display = bigView ? 'none' : '';
-  document.getElementById('plusBtn').style.display = bigView ? 'none' : '';
-  loupeBtn.style.display = bigView ? 'none' : '';
+  document.getElementById('compactTools').style.display = bigView ? 'none' : 'inline';
+  document.getElementById('bigTools').style.display = bigView ? 'inline' : 'none';
+  document.getElementById('hint').style.display = bigView ? 'none' : 'block';
   if (bigView || !loupeOn) { hideLoupe(); }
-  let режим_надписи = 'обычный вид';
-  if (bigView) { режим_надписи = 'большой вид · увеличение ' + zoomLevel + '×'; }
-  else if (loupeOn) { режим_надписи = 'лупа ' + loupeZoom + '×'; }
-  statusText.textContent = режим_надписи
+  let текст_режима = 'обычный вид';
+  if (bigView) { текст_режима = 'большой вид · увеличение ' + zoomLevel + '×'; }
+  else if (loupeOn) { текст_режима = 'лупа ' + loupeZoom + '×'; }
+  statusText.textContent = текст_режима
     + (angle ? ' · поворот ' + angle + '°' : '')
     + (inverted ? ' · инверсия' : '');
 }
@@ -305,14 +306,20 @@ function loupeStep(step) { loupeZoom = Math.min(10, Math.max(2, loupeZoom + step
 function toggleInvert() { inverted = !inverted; refreshView(); }
 function rotate90() { angle = (angle + 90) % 360; refreshView(); }
 function setZoom(value) { zoomLevel = parseFloat(value); refreshView(); }
-function resetAll() { loupeZoom = 3; zoomLevel = 1; angle = 0; inverted = false;
-                      zoomRange.value = 1; refreshView(); }
-function toggleBig() {
-  bigView = !bigView;
-  viewArea.classList.toggle('big', bigView);
-  zoomRange.value = bigView ? 2 : 1;
-  zoomLevel = bigView ? 2 : 1;
-  document.getElementById('hint').style.display = bigView ? 'none' : 'block';
+function resetAll() { loupeZoom = 3; zoomLevel = 2; angle = 0; inverted = false;
+                      zoomRange.value = 2; refreshView(); }
+function enterBig() {
+  bigView = true;
+  viewArea.classList.add('big');
+  zoomLevel = 2;
+  zoomRange.value = 2;
+  loupeOn = false;
+  refreshView();
+}
+function exitBig() {
+  bigView = false;
+  viewArea.classList.remove('big');
+  zoomLevel = 1;
   refreshView();
 }
 function openInNewTab() {
@@ -322,7 +329,7 @@ function openInNewTab() {
     '<body style="margin:0;background:#333;display:flex;justify-content:center">' +
     '<img src="' + sheet.src + '" style="width:100%;max-width:none">' +
     '<p style="position:fixed;bottom:6px;left:8px;color:#fff;font:13px sans-serif">' +
-    'Ctrl + колесо мыши — масштаб браузера. Закройте вкладку для возврата.</p></body>');
+    'Ctrl + колесо мыши — масштаб браузера.</p></body>');
   win.document.close();
 }
 function downloadImage() {
@@ -535,34 +542,7 @@ def tab_document():
             st.info("Показан текст без картинки: для вставленного текста и примера "
                     "оригинала нет.")
         else:
-            if "turn" not in st.session_state:
-                st.session_state.turn = 0
-            rotate90_кнопки = st.columns(3)
-            if rotate90_кнопки[0].button("⟲ влево"):
-                st.session_state.turn = (st.session_state.turn + 270) % 360
-            if rotate90_кнопки[1].button("⟳ вправо"):
-                st.session_state.turn = (st.session_state.turn + 90) % 360
-            if rotate90_кнопки[2].button("ровно"):
-                st.session_state.turn = 0
-            st.caption("rotate90: %d° · сервис уже развернул снимок «ногами вниз»"
-                       % st.session_state.turn)
-
-            # приближение: разглядеть строчку, тени и нажим ручки
-            scale = st.slider("Приближение (×)", 1.0, 8.0, 1.0, 0.5,
-                              help="1 — весь sheet; 8 — самая крупная лупа. "
-                                   "Положение лупы задаётся ползунками ниже.")
-            shift_x, shift_y = 0.5, 0.5
-            if scale > 1.01:
-                ползунки = st.columns(2)
-                shift_x = ползунки[0].slider("Сдвиг по ширине", 0.0, 1.0, 0.5, 0.05)
-                shift_y = ползунки[1].slider("Сдвиг по высоте", 0.0, 1.0, 0.5, 0.05)
-                st.caption("лупа %.1f× · видно %.0f%% sheetа" % (scale, 100 / scale))
-            резкая = document_image(path, scale, shift_x, shift_y) if scale > 1.01 else image
-            st.image(резкая if резкая is not None else image, use_container_width=True,
-                     caption="Оригинал: приближение %.1f×" % scale)
-            if st.checkbox("Лупа и инструменты (увеличение, toggleInvert, rotate90)",
-                          value=True):
-                loupe_viewer(image)
+            loupe_viewer(image, height=760)
 
 
 def tab_laws():
