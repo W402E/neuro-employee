@@ -374,7 +374,7 @@ document.addEventListener('wheel', (event) => {
   zoomStep(event.deltaY < 0 ? 0.5 : -0.5);
 }, {passive: false});
 update();
-</script></body></html>`);
+<\\/script></body></html>`);
   окно.document.close();
 }
 refreshView();
