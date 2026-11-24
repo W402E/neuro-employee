@@ -251,21 +251,28 @@ def _variants(image):
 
 
 def _decode_image(image):
-    """QR и штрих-коды на одном изображении (zxing-cpp, запасной путь — OpenCV)."""
+    """Все коды на изображении: по всем подготовкам и поворотам, без остановки на первом."""
     found = []
     for variant in _variants(image):
-        this = _decode_one(variant)
-        for item in this:
+        for item in _decode_one(variant):
             if item not in found:
                 found.append(item)
-        if found:
-            return found
     return found
 
 
 def _decode_one(image):
-    """Один проход по одной картинке, без подготовки."""
+    """Все коды одной картинки: zxing-cpp (список) + OpenCV (несколько QR)."""
     found = []
+
+    def добавить(формат, текст):
+        текст = (текст or "").strip()
+        if not текст:
+            return
+        # один и тот же код находят оба декодера — оставляем один
+        if any(existing["text"] == текст for existing in found):
+            return
+        found.append({"format": формат, "text": текст})
+
     try:
         import zxingcpp
     except Exception:      # noqa: BLE001
@@ -273,25 +280,28 @@ def _decode_one(image):
     if zxingcpp is not None:
         try:
             for result in zxingcpp.read_barcodes(image):
-                if result.text:
-                    item = {"format": str(result.format).split(".")[-1],
-                            "text": result.text.strip()}
-                    if item not in found:
-                        found.append(item)
+                добавить(str(result.format).split(".")[-1], getattr(result, "text", ""))
         except Exception:      # noqa: BLE001
             pass
-    if found:
-        return found
+
+    # OpenCV умеет находить несколько QR за один проход — это и нужно для билетов.
     try:
         import cv2
+        try:
+            cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_SILENT)
+        except Exception:      # noqa: BLE001
+            pass
         detector = cv2.QRCodeDetector()
         for turn in (None, cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180,
                      cv2.ROTATE_90_COUNTERCLOCKWISE):
             working = image if turn is None else cv2.rotate(image, turn)
-            data, _, _ = detector.detectAndDecode(working)
-            if data and data.strip():
-                found.append({"format": "QR", "text": data.strip()})
-                break
+            try:
+                слова, _, _ = detector.detectAndDecodeMulti(working)
+                for data in слова or []:
+                    добавить("QR", data)
+            except Exception:      # noqa: BLE001
+                data, _, _ = detector.detectAndDecode(working)
+                добавить("QR", data)
     except Exception:      # noqa: BLE001
         pass
     return found
