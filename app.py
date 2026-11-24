@@ -198,86 +198,116 @@ def document_image(path, scale=1.0, shift_x=0.5, shift_y=0.5):
 
 
 
-def loupe_viewer(image, height=640):
-    """Показать документ с лупой и инструментами (HTML-компонент внутри страницы).
+def loupe_viewer(image, height=820):
+    """Документ с лупой и большим режимом: увеличение, инверсия, поворот, прокрутка.
 
-    image — картинка в RGB (numpy). Возвращает ничего, рисует компонент.
+    image — картинка в RGB (numpy). Лупа включается в обычном режиме, инструменты — в обоих.
     """
     try:
-        import streamlit.components.v1 as components
-        from PIL import Image
+        import base64                       # noqa: PLC0415
+        import io                           # noqa: PLC0415
+        import numpy as np                  # noqa: PLC0415
+        from PIL import Image               # noqa: PLC0415
+
+        картинка = np.asarray(image)
+        if картинка.ndim != 3 or картинка.shape[2] < 3:
+            raise ValueError("картинка не в цвете RGB")
         буфер = io.BytesIO()
-        Image.fromarray(image).save(буфер, format="PNG")
+        Image.fromarray(картинка[:, :, :3].astype("uint8")).save(буфер, format="PNG")
         данные = base64.b64encode(буфер.getvalue()).decode("ascii")
-    except Exception:      # noqa: BLE001
-        st.info("Лупа недоступна: не удалось подготовить картинку.")
+    except Exception as ошибка:      # noqa: BLE001
+        st.info("Лупа не собралась: %s. Смотрите обычный просмотр выше — он работает."
+                % type(ошибка).__name__)
         return
 
     разметка = """
 <!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
 <style>
+  * { box-sizing: border-box; }
   body { margin:0; font-family:"Segoe UI", Arial, sans-serif; color:#15233a; background:#f7f9fc; }
   .плашка { display:flex; gap:6px; align-items:center; padding:6px 8px; background:#eef4fa;
             border:1px solid #d3dfec; border-radius:8px 8px 0 0; flex-wrap:wrap; }
   .плашка button { padding:5px 9px; border:1px solid #b9c7d8; background:#fff; border-radius:6px;
                    cursor:pointer; font-size:13px; }
-  .плашка button:hover { background:#e7f0fa; }
-  .плашка .масштаб { font-size:13px; color:#41536a; margin-left:auto; }
-  .поле { position:relative; overflow:hidden; background:#fff; border:1px solid #d3dfec;
-          border-top:0; border-radius:0 0 8px 8px; }
-  .поле.большой { position:fixed; inset:0; z-index:9999; border-radius:0; }
-  .поле.большой img { max-height:100vh; }
-  .поле img { display:block; width:100%; transition:transform .15s; transform-origin:center; }
-  .лупа { position:absolute; width:150px; height:150px; border-radius:50%;
-          border:3px solid #1f5f9e; box-shadow:0 4px 14px rgba(20,40,80,.35);
+  .плашка button.выбран { background:#1f5f9e; color:#fff; border-color:#1f5f9e; }
+  .плашка input[type=range] { width:110px; }
+  .надпись { font-size:13px; color:#41536a; margin-left:auto; }
+  .поле { position:relative; height:calc(100% - 42px); overflow:auto; background:#fff;
+          border:1px solid #d3dfec; border-top:0; border-radius:0 0 8px 8px; }
+  .поле.большой { position:fixed; inset:0; height:auto; border-radius:0; z-index:9999; }
+  img.лист { display:block; width:100%; transition:transform .12s; transform-origin:top left; }
+  .поле.большой img.лист { width:auto; max-width:none; }
+  .лупа { position:absolute; width:170px; height:170px; border-radius:50%;
+          border:3px solid #1f5f9e; box-shadow:0 6px 16px rgba(20,40,80,.35);
           background-repeat:no-repeat; background-color:#fff; pointer-events:none;
-          display:none; z-index:5; }
+          display:none; z-index:20; }
   .подсказка { font-size:12px; color:#5a6b80; padding:4px 8px; }
 </style></head><body>
-<div id="корень">
+<div id="корень" style="height:100%">
   <div class="плашка">
+    <button id="режим" class="" onclick="режим()">Большой вид</button>
     <button onclick="кратность(-1)">− лупа</button>
     <button onclick="кратность(1)">+ лупа</button>
+    <input type="range" id="увеличение" min="1" max="10" step="0.5" value="1"
+           oninput="увеличить(this.value)">
     <button onclick="инверсия()">инверсия</button>
     <button onclick="поворот()">поворот 90°</button>
     <button onclick="сброс()">сброс</button>
-    <button onclick="большой()">⛶ большой вид</button>
-    <button onclick="скачать()">скачать картинку</button>
-    <span class="масштаб" id="надпись">лупа 3×</span>
+    <button onclick="полный()">⛶ во весь экран</button>
+    <button onclick="скачать()">скачать</button>
+    <span class="надпись" id="сведения">лупа 3× · увеличение 1×</span>
   </div>
   <div class="поле" id="поле">
-    <img id="лист" src="data:image/png;base64,__КАРТИНКА__" alt="оригинал документа">
+    <img class="лист" id="лист" src="data:image/png;base64,__КАРТИНКА__" alt="оригинал документа">
     <div class="лупа" id="лупа"></div>
   </div>
-  <div class="подсказка">Водите курсором по документу — рядом появится лупа.
-    Колесо мыши меняет увеличение, «инверсия» помогает на бледных сканах.
-    Чтобы вернуться из большого вида — нажмите «большой вид» ещё раз или Esc.</div>
+  <div class="подсказка" id="подсказка">Водите курсором по листу — рядом появится лупа.
+    «Большой вид» растягивает лист на всё окно, тогда увеличение задаёт ползунок,
+    а по листу двигаются прокруткой. «инверсия» помогает на бледных сканах.</div>
 </div>
 <script>
-let крат = 3, угол = 0, инверт = false, большой_режим = false;
+let крат = 3, увеличение_тек = 1, угол = 0, инверт = false, большой = false;
 const лист = document.getElementById('лист');
 const лупа = document.getElementById('лупа');
 const поле = document.getElementById('поле');
-const надпись = document.getElementById('надпись');
+const сведения = document.getElementById('сведения');
+const кнопка_режима = document.getElementById('режим');
+const ползунок = document.getElementById('увеличение');
 
 function обновить() {
-  лист.style.transform = 'rotate(' + угол + 'deg)';
-  лист.style.filter = инверт ? 'invert(1) hue-rotate(180deg)' : 'none';
-  надпись.textContent = 'лупа ' + крат + '×' + (угол ? ' · поворот ' + угол + '°' : '')
-                        + (инверт ? ' · инверсия' : '');
+  лист.style.transform = 'rotate(' + угол + 'deg) scale(' + увеличение_тек + ')';
+  лист.style.filter = инверт ? 'invert(1)' : 'none';
+  сведения.textContent = 'лупа ' + крат + '× · увеличение ' + увеличение_тек + '×'
+                          + (угол ? ' · поворот ' + угол + '°' : '')
+                          + (инверт ? ' · инверсия' : '') + (большой ? ' · большой вид' : '');
+  // фон лупы: увеличенная копия самого листа
   лупа.style.backgroundImage = 'url(' + лист.src + ')';
   лупа.style.backgroundSize = (крат * 100) + '% auto';
 }
 function кратность(шаг) { крат = Math.min(10, Math.max(2, крат + шаг)); обновить(); }
 function инверсия() { инверт = !инверт; обновить(); }
 function поворот() { угол = (угол + 90) % 360; обновить(); }
-function сброс() { крат = 3; угол = 0; инверт = false; обновить(); }
-function большой() {
-  большой_режим = !большой_режим;
-  поле.classList.toggle('большой', большой_режим);
-  if (большой_режим) {
-    if (поле.requestFullscreen) { поле.requestFullscreen().catch(() => {}); }
-  } else if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); }
+function увеличить(значение) { увеличение_тек = parseFloat(значение); обновить(); }
+function сброс() { крат = 3; увеличение_тек = 1; угол = 0; инверт = false;
+                   ползунок.value = 1; обновить(); }
+
+function режим() {
+  большой = !большой;
+  поле.classList.toggle('большой', большой);
+  кнопка_режима.classList.toggle('выбран', большой);
+  кнопка_режима.textContent = большой ? 'Обычный вид' : 'Большой вид';
+  document.getElementById('подсказка').style.display = большой ? 'none' : 'block';
+  if (большой) { ползунок.value = 2; увеличение_тек = 2; }
+  else { ползунок.value = 1; увеличение_тек = 1; }
+  обновить();
+}
+function полный() {
+  if (поле.requestFullscreen) {
+    if (document.fullscreenElement) { document.exitFullscreen(); }
+    else { поле.requestFullscreen().catch(() => {
+      режим();     // если браузер не разрешил — переходим в большой вид
+    }); }
+  } else { режим(); }
 }
 function скачать() {
   const ссылка = document.createElement('a');
@@ -285,29 +315,53 @@ function скачать() {
   ссылка.download = 'документ.png';
   ссылка.click();
 }
+
+// лупа: точка под курсором ставится в центр кружка
 поле.addEventListener('mousemove', (событие) => {
   const рамка = лист.getBoundingClientRect();
-  const x = событие.clientX - рамка.left;
+  if (рамка.width < 10 || рамка.height < 10) { return; }
+  const x = событие.clientX - рамка.left;          // внутри показанной картинки
   const y = событие.clientY - рамка.top;
+  const внутри_x = x >= 0 && x <= рамка.width;
+  const внутри_y = y >= 0 && y <= рамка.height;
+  if (!внутри_x || !внутри_y) { лупа.style.display = 'none'; return; }
+  const размер = 170;
+  // масштаб фона считаем от размеров показанной картинки, а не от координат
+  лупа.style.backgroundSize = (рамка.width * крат) + 'px ' + (рамка.height * крат) + 'px';
+  лупа.style.left = (x - размер / 2) + 'px';
+  лупа.style.top = (y - размер / 2) + 'px';
+  лупа.style.backgroundPosition = (-(x * крат - размер / 2)) + 'px ' +
+                                   (-(y * крат - размер / 2)) + 'px';
   лупа.style.display = 'block';
-  лупа.style.left = (x - 75) + 'px';
-  лупа.style.top = (y - 75) + 'px';
-  // внутри лупы показываем место под курсором
-  лупа.style.backgroundPosition = (-x * крат + 75) + 'px ' + (-y * крат + 75) + 'px';
 });
 поле.addEventListener('mouseleave', () => { лупа.style.display = 'none'; });
 поле.addEventListener('wheel', (событие) => {
+  if (!большой) { return; }
   событие.preventDefault();
-  кратность(событие.deltaY < 0 ? 1 : -1);
+  const шаг = событие.deltaY < 0 ? 0.5 : -0.5;
+  увеличение_тек = Math.min(10, Math.max(1, увеличение_тек + шаг));
+  ползунок.value = увеличение_тек;
+  обновить();
 }, {passive: false});
-document.addEventListener('keydown', (событие) => {
-  if (событие.key === 'Escape' && большой_режим) { большой(); }
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement && большой) {
+    поле.classList.remove('большой');
+    большой = false;
+    кнопка_режима.classList.remove('выбран');
+    кнопка_режима.textContent = 'Большой вид';
+    обновить();
+  }
 });
 обновить();
 </script></body></html>
 """
     разметка = разметка.replace("__КАРТИНКА__", данные)
-    components.html(разметка, height=height, scrolling=False)
+    if hasattr(st, "iframe"):
+        st.iframe(разметка, height=height)
+    else:
+        import streamlit.components.v1 as components   # noqa: PLC0415
+        components.html(разметка, height=height, scrolling=False)
+
 
 def zoom_crop(image, scale, shift_x, shift_y):
     """Вырезать область и растянуть её — так работает приближение.
