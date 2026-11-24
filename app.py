@@ -118,6 +118,14 @@ def read_document(uploaded):
     return pages, uploaded.name, needs_ocr, path
 
 
+def _png_on_disk(payload):
+    """Сохранить байты картинки во временный файл — нужен для определения поворота."""
+    handle, path = tempfile.mkstemp(suffix=".png")
+    with os.fdopen(handle, "wb") as file_handle:
+        file_handle.write(payload)
+    return path
+
+
 def document_image(path, scale=1.0, shift_x=0.5, shift_y=0.5):
     """Картинка документа для показа.
 
@@ -176,11 +184,14 @@ def document_image(path, scale=1.0, shift_x=0.5, shift_y=0.5):
                 картинка = cv2.resize(картинка, (int(картинка.shape[1] * коэффициент),
                                                  int(картинка.shape[0] * коэффициент)))
 
-        угол = recognition.orientation_angle(_png_on_disk(поток))
-        if угол in (90, 180, 270):
-            повороты = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
-                        270: cv2.ROTATE_90_COUNTERCLOCKWISE}
-            картинка = cv2.rotate(картинка, повороты[угол])
+        try:                                  # определение поворота не должно гасить показ
+            угол = recognition.orientation_angle(_png_on_disk(поток))
+            if угол in (90, 180, 270):
+                повороты = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
+                            270: cv2.ROTATE_90_COUNTERCLOCKWISE}
+                картинка = cv2.rotate(картинка, повороты[угол])
+        except Exception:                     # noqa: BLE001
+            pass
         return cv2.cvtColor(картинка, cv2.COLOR_BGR2RGB)
     except Exception:      # noqa: BLE001
         return None
