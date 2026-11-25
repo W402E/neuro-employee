@@ -8,11 +8,11 @@ r"""GLOSSARY — помощник по сокращениям (English identifie
     {
       "updated": "…",
       "how_to_edit": "…",
-      "abbreviations": {
-         "СНИЛС": {"full": "страховой номер индивидуального лицевого счёта",
-                   "latin": "SNILS", "spoken": "снилс", "note": "…",
-                   "source": "27-ФЗ", "variants": [{"meaning": "…", "author": "…", "when": "…"}]}
-      }
+      "abbreviations": [
+         {"code": "СНИЛС", "full": "страховой номер индивидуального лицевого счёта",
+          "latin": "SNILS", "spoken": "снилс", "note": "…",
+          "source": "27-ФЗ", "variants": [{"meaning": "…", "author": "…", "when": "…"}]}
+      ]
     }
 
 Почему варианты: слово пользователя — один человек понимает сокращение так, другой иначе,
@@ -34,21 +34,35 @@ DEFAULT_PATH = os.path.join(MODULE_DIR, "data", "abbreviations.json")
 
 
 def load_glossary(path=DEFAULT_PATH):
-    """Return abbreviation entries: {KEY: entry}."""
+    """Return abbreviation entries: {KEY: entry}.
+
+    В файле записи хранятся списком: `{"code": "ЖКХ", "full": …}`. Так имена полей
+    остаются английскими, а само сокращение лежит значением поля `code`.
+    Прежний вид (словарь, где ключ — само сокращение) читается тоже.
+    """
     if not os.path.exists(path):
         return {}
     with open(path, encoding="utf-8") as handle:
         data = json.load(handle)
-    return data.get("abbreviations", {})
+    raw = data.get("abbreviations", {})
+    if isinstance(raw, dict):
+        return raw
+    entries = {}
+    for record in raw:
+        code = (record.get("code") or "").strip()
+        if not code:
+            continue
+        entries[code] = {key: value for key, value in record.items() if key != "code"}
+    return entries
 
 
 def save_glossary(entries, path=DEFAULT_PATH):
-    """Write entries back, keeping the header fields."""
+    """Write entries back as a list of records, keeping the header fields."""
     data = {}
     if os.path.exists(path):
         with open(path, encoding="utf-8") as handle:
             data = json.load(handle)
-    data["abbreviations"] = entries
+    data["abbreviations"] = [dict({"code": code}, **entry) for code, entry in entries.items()]
     data["updated"] = time.strftime("%d.%m.%Y")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:

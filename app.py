@@ -85,7 +85,7 @@ def analyse_text(pages, name):
 
 
 def read_document(uploaded):
-    """Прочитать загруженный файл: (pages, document_name, needs_ocr).
+    """Прочитать загруженный файл: (pages, document_name, needs_ocr, temp_path).
 
     pages = [{"page": 1, "text": "…"}] — так же, как в остальных модулях.
     """
@@ -119,7 +119,7 @@ def read_document(uploaded):
 
 
 def _png_on_disk(payload):
-    """Сохранить байты картинки во временный файл — нужен для определения rotate90а."""
+    """Сохранить байты картинки во временный файл — нужен для определения поворота."""
     handle, path = tempfile.mkstemp(suffix=".png")
     with os.fdopen(handle, "wb") as file_handle:
         file_handle.write(payload)
@@ -140,188 +140,79 @@ def document_image(path, scale=1.0, shift_x=0.5, shift_y=0.5):
         import numpy as np
         import pymupdf
 
-        доля = 1.0 / max(scale, 1.0)                 # какую часть sheetа показываем
-        левый_край = min(max(shift_x - доля / 2, 0.0), 1.0 - доля)
-        верхний_край = min(max(shift_y - доля / 2, 0.0), 1.0 - доля)
+        share = 1.0 / max(scale, 1.0)                 # какую часть sheetа показываем
+        left_edge = min(max(shift_x - share / 2, 0.0), 1.0 - share)
+        top_edge = min(max(shift_y - share / 2, 0.0), 1.0 - share)
 
         if str(path).lower().endswith(".pdf"):
             document = pymupdf.open(path)
             try:
-                страница = document[0]
-                рамка = страница.rect
-                область = pymupdf.Rect(
-                    рамка.x0 + рамка.width * левый_край,
-                    рамка.y0 + рамка.height * верхний_край,
-                    рамка.x0 + рамка.width * (левый_край + доля),
-                    рамка.y0 + рамка.height * (верхний_край + доля))
+                pdf_page = document[0]
+                page_rect = pdf_page.rect
+                clip_rect = pymupdf.Rect(
+                    page_rect.x0 + page_rect.width * left_edge,
+                    page_rect.y0 + page_rect.height * top_edge,
+                    page_rect.x0 + page_rect.width * (left_edge + share),
+                    page_rect.y0 + page_rect.height * (top_edge + share))
                 # увеличение подбираем так, чтобы картинка была около 1600 точек
-                точек = 1600.0
-                увеличение = точек / max(1.0, max(область.width, область.height))
-                увеличение = min(max(увеличение, 2.0), 12.0)
-                поток = страница.get_pixmap(matrix=pymupdf.Matrix(увеличение, увеличение),
-                                           clip=область).tobytes("png")
+                target_points = 1600.0
+                zoom_factor = target_points / max(1.0, max(clip_rect.width, clip_rect.height))
+                zoom_factor = min(max(zoom_factor, 2.0), 12.0)
+                blob = pdf_page.get_pixmap(matrix=pymupdf.Matrix(zoom_factor, zoom_factor),
+                                           clip=clip_rect).tobytes("png")
             finally:
                 document.close()
         else:
-            with open(path, "rb") as файл:
-                поток = файл.read()
+            with open(path, "rb") as source_stream:
+                blob = source_stream.read()
 
-        картинка = cv2.imdecode(np.frombuffer(поток, dtype=np.uint8), cv2.IMREAD_COLOR)
-        if картинка is None:
+        picture = cv2.imdecode(np.frombuffer(blob, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if picture is None:
             return None
 
         if not str(path).lower().endswith(".pdf"):
             # фото: вырезаем область из оригинала, без растяжения
-            высота, ширина = картинка.shape[:2]
-            x0 = int(ширина * левый_край)
-            y0 = int(высота * верхний_край)
-            x1 = int(ширина * (левый_край + доля))
-            y1 = int(высота * (верхний_край + доля))
-            картинка = картинка[y0:y1, x0:x1]
-            длинная = max(картинка.shape[:2])
-            if длинная > 1800:
-                коэффициент = 1800 / длинная
-                картинка = cv2.resize(картинка, (int(картинка.shape[1] * коэффициент),
-                                                 int(картинка.shape[0] * коэффициент)))
+            height_px, width_px = picture.shape[:2]
+            x0 = int(width_px * left_edge)
+            y0 = int(height_px * top_edge)
+            x1 = int(width_px * (left_edge + share))
+            y1 = int(height_px * (top_edge + share))
+            picture = picture[y0:y1, x0:x1]
+            longest_side = max(picture.shape[:2])
+            if longest_side > 1800:
+                ratio = 1800 / longest_side
+                picture = cv2.resize(picture, (int(picture.shape[1] * ratio),
+                                                 int(picture.shape[0] * ratio)))
 
         try:                                  # определение rotate90а не должно гасить показ
-            angle = recognition.orientation_angle(_png_on_disk(поток))
+            angle = recognition.orientation_angle(_png_on_disk(blob))
             if angle in (90, 180, 270):
-                rotate90ы = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
+                rotation_by_angle = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
                             270: cv2.ROTATE_90_COUNTERCLOCKWISE}
-                картинка = cv2.rotate(картинка, rotate90ы[angle])
+                picture = cv2.rotate(picture, rotation_by_angle[angle])
         except Exception:                     # noqa: BLE001
             pass
-        return cv2.cvtColor(картинка, cv2.COLOR_BGR2RGB)
+        return cv2.cvtColor(picture, cv2.COLOR_BGR2RGB)
     except Exception:      # noqa: BLE001
         return None
 
 
 
-def loupe_viewer(image, height=760):
-    """Документ и две кнопки: «Лупа» (колесо меняет кратность) и «Открыть в новой вкладке».
-
-    В новой вкладке — полноценный просмотр с инструментами: увеличение, инверсия, поворот,
-    сброс, скачать, во весь экран. Имена в скрипте латиницей, подписи по-русски.
-    """
-    try:
-        import base64                       # noqa: PLC0415
-        import io                           # noqa: PLC0415
-        import numpy as np                  # noqa: PLC0415
-        from PIL import Image               # noqa: PLC0415
-
-        картинка = np.asarray(image)
-        if картинка.ndim != 3 or картинка.shape[2] < 3:
-            raise ValueError("картинка не в цвете RGB")
-        буфер = io.BytesIO()
-        Image.fromarray(картинка[:, :, :3].astype("uint8")).save(буфер, format="PNG")
-        данные = base64.b64encode(буфер.getvalue()).decode("ascii")
-    except Exception as ошибка:      # noqa: BLE001
-        st.info("Лупа не собралась: %s. Смотрите просмотр выше." % type(ошибка).__name__)
-        return
-
-    разметка = """
-<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
-<style>
-  * { box-sizing: border-box; }
-  body { margin:0; height:100%; font-family:"Segoe UI", Arial, sans-serif; color:#15233a;
-         background:#f7f9fc; }
-  .bar { display:flex; gap:6px; align-items:center; padding:6px 8px; background:#eef4fa;
-         border:1px solid #d3dfec; border-radius:8px 8px 0 0; flex-wrap:wrap; }
-  .bar button { padding:6px 13px; border:1px solid #8fa3ba; background:#fff; border-radius:6px;
-                cursor:pointer; font-size:14px; font-weight:600; }
-  .bar button.on { background:#1f5f9e; color:#fff; border-color:#1f5f9e; }
-  .bar button.main { background:#1f5f9e; color:#fff; border-color:#1f5f9e; }
-  .status { font-size:13px; color:#41536a; margin-left:auto; }
-  .view { position:relative; height:calc(100% - 48px); overflow:auto; background:#fff;
-          border:1px solid #d3dfec; border-top:0; border-radius:0 0 8px 8px; }
-  img.sheet { display:block; width:100%; }
-  .loupe { position:absolute; width:190px; height:190px; border-radius:50%;
-           border:3px solid #1f5f9e; box-shadow:0 6px 16px rgba(20,40,80,.35);
-           background-repeat:no-repeat; background-color:#fff; pointer-events:none;
-           display:none; z-index:20; }
-  .closer { position:absolute; width:24px; height:24px; border-radius:50%; background:#1f5f9e;
-            color:#fff; border:2px solid #fff; font-size:14px; line-height:19px; text-align:center;
-            cursor:pointer; z-index:30; display:none; user-select:none; }
-  .hint { font-size:12px; color:#5a6b80; padding:4px 8px; }
-</style></head><body>
-<div style="height:100%">
-  <div class="bar">
-    <button id="loupeBtn" onclick="toggleLoupe()">Лупа</button>
-    <button class="main" onclick="openInNewTab()">Открыть в новой вкладке</button>
-    <span class="status" id="status">обычный вид</span>
-  </div>
-  <div class="view" id="viewArea">
-    <img class="sheet" id="sheet" src="data:image/png;base64,__КАРТИНКА__" alt="оригинал документа">
-    <div class="loupe" id="loupe"></div>
-    <div class="closer" id="loupeClose" onclick="loupeOff()" title="Убрать лупу">✕</div>
-  </div>
-  <div class="hint" id="hint">Документ занимает всю область. Кнопка «Лупа» включает кружок:
-    ведите курсор по листу, <b>колесо мыши меняет кратность</b> (2…10×), ✕ убирает лупу.
-    Кнопка «Открыть в новой вкладке» даёт отдельную страницу браузера со всеми инструментами.</div>
-</div>
-<script>
-let loupeZoom = 3, loupeOn = false;
-const sheet = document.getElementById('sheet');
-const loupe = document.getElementById('loupe');
-const loupeClose = document.getElementById('loupeClose');
-const viewArea = document.getElementById('viewArea');
-const statusText = document.getElementById('status');
-const loupeBtn = document.getElementById('loupeBtn');
-
-function refreshView() {
-  loupeBtn.classList.toggle('on', loupeOn);
-  if (!loupeOn) { hideLoupe(); }
-  statusText.textContent = loupeOn ? ('лупа ' + loupeZoom + '× · колесо меняет кратность')
-                                   : 'обычный вид · нажмите «Лупа»';
-}
-function hideLoupe() { loupe.style.display = 'none'; loupeClose.style.display = 'none'; }
-function toggleLoupe() { loupeOn = !loupeOn; refreshView(); }
-function loupeOff() { loupeOn = false; refreshView(); }
-
-viewArea.addEventListener('mousemove', (event) => {
-  if (!loupeOn) { return; }
-  const box = sheet.getBoundingClientRect();
-  if (box.width < 10 || box.height < 10) { return; }
-  const x = event.clientX - box.left;
-  const y = event.clientY - box.top;
-  if (x < 0 || y < 0 || x > box.width || y > box.height) { hideLoupe(); return; }
-  const size = 190;
-  loupe.style.backgroundImage = 'url("' + sheet.src + '")';        // фон лупы
-  loupe.style.backgroundSize = (box.width * loupeZoom) + 'px ' + (box.height * loupeZoom) + 'px';
-  loupe.style.left = (x - size / 2) + 'px';
-  loupe.style.top = (y - size / 2) + 'px';
-  loupe.style.backgroundPosition = (-(x * loupeZoom - size / 2)) + 'px ' +
-                                   (-(y * loupeZoom - size / 2)) + 'px';
-  loupe.style.display = 'block';
-  loupeClose.style.left = (x + size / 2 - 18) + 'px';
-  loupeClose.style.top = (y - size / 2 - 6) + 'px';
-  loupeClose.style.display = 'block';
-});
-viewArea.addEventListener('mouseleave', hideLoupe);
-viewArea.addEventListener('wheel', (event) => {
-  if (!loupeOn) { return; }
-  event.preventDefault();
-  loupeZoom = Math.min(10, Math.max(2, loupeZoom + (event.deltaY < 0 ? 0.5 : -0.5)));
-  statusText.textContent = 'лупа ' + loupeZoom + '× · колесо меняет кратность';
-}, {passive: false});
-
-function openInNewTab() {
-  const окно = window.open('', '_blank');
-  if (!окно) { alert('Браузер заблокировал новую вкладку — разрешите всплывающие окна.'); return; }
-  окно.document.write(`<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
+def _viewer_page(image_src):
+    """Собрать страницу просмотра с инструментами (картинка уже внутри, как data URL)."""
+    return """<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
 <title>Оригинал документа — просмотр</title>
 <style>
  body { margin:0; font-family:"Segoe UI", Arial, sans-serif; background:#20242a; color:#fff; }
  .tools { position:sticky; top:0; display:flex; gap:8px; align-items:center; flex-wrap:wrap;
           padding:8px 10px; background:#1f242b; border-bottom:1px solid #3a4048; z-index:5; }
- .tools button { padding:6px 13px; border:1px solid #6b7a8c; background:#3b4552; color:#fff;
+ .tools button { padding:7px 14px; border:1px solid #6b7a8c; background:#3b4552; color:#fff;
                  border-radius:6px; cursor:pointer; font-size:14px; font-weight:600; }
- .tools button:hover { background:#3a4553; }
- .tools input[type=range] { width:160px; }
- .tools .подпись { font-size:14px; color:#fff; margin-left:auto; font-weight:600; }
- .holder { padding:10px; display:flex; justify-content:center; }
- img.doc { transition:transform .12s; transform-origin:top left; background:#fff; }
+ .tools button:hover { background:#48545f; }
+ .tools input[type=range] { width:170px; }
+ .tools .info { font-size:14px; color:#fff; margin-left:auto; font-weight:600; }
+ .holder { padding:12px; display:flex; justify-content:center; }
+ img.doc { display:block; background:#fff; transform-origin:top left; transition:transform .12s; }
 </style></head><body>
 <div class="tools">
   <button onclick="zoomStep(-1)">−</button>
@@ -332,10 +223,10 @@ function openInNewTab() {
   <button onclick="resetAll()">сброс</button>
   <button onclick="fullScreen()">во весь экран</button>
   <button onclick="save()">скачать</button>
-  <span class="подпись" id="info">увеличение 1×</span>
+  <span class="info" id="info">увеличение 1×</span>
 </div>
 <div class="holder" id="holder">
-  <img class="doc" id="doc" src="__ИСТОЧНИК__" alt="оригинал документа">
+  <img class="doc" id="doc" src="__SRC__" alt="оригинал документа">
 </div>
 <script>
 let zoomLevel = 1, angle = 0, inverted = false;
@@ -345,8 +236,9 @@ const holder = document.getElementById('holder');
 function update() {
   doc.style.transform = 'rotate(' + angle + 'deg) scale(' + zoomLevel + ')';
   doc.style.filter = inverted ? 'invert(1)' : 'none';
-  info.textContent = 'увеличение ' + zoomLevel + '×' + (angle ? ' · поворот ' + angle + '°' : '')
-                     + (inverted ? ' · инверсия' : '');
+  info.textContent = 'увеличение ' + zoomLevel + '×'
+    + (angle ? ' · поворот ' + angle + '°' : '')
+    + (inverted ? ' · инверсия' : '');
 }
 function zoomStep(step) {
   zoomLevel = Math.min(10, Math.max(1, zoomLevel + step));
@@ -360,7 +252,7 @@ function resetAll() { zoomLevel = 1; angle = 0; inverted = false;
                       document.getElementById('zoom').value = 1; update(); }
 function fullScreen() {
   if (document.fullscreenElement) { document.exitFullscreen(); }
-  else { holder.requestFullscreen().catch(() => {}); }
+  else { holder.requestFullscreen().catch(function () {}); }
 }
 function save() {
   const link = document.createElement('a');
@@ -368,24 +260,149 @@ function save() {
   link.download = 'документ.png';
   link.click();
 }
-document.addEventListener('wheel', (event) => {
+document.addEventListener('wheel', function (event) {
   if (!event.ctrlKey) { return; }
   event.preventDefault();
   zoomStep(event.deltaY < 0 ? 0.5 : -0.5);
 }, {passive: false});
 update();
-<\\/script></body></html>`);
-  окно.document.close();
+</script></body></html>""".replace("__SRC__", image_src)
+
+
+def loupe_viewer(image, height=760):
+    """Документ и две кнопки: «Лупа» (колесо меняет кратность) и «Открыть в новой вкладке»."""
+    try:
+        import base64                       # noqa: PLC0415
+        import io                           # noqa: PLC0415
+        import numpy as np                  # noqa: PLC0415
+        from PIL import Image               # noqa: PLC0415
+
+        picture = np.asarray(image)
+        if picture.ndim != 3 or picture.shape[2] < 3:
+            raise ValueError("картинка не в цвете RGB")
+        sheet_image = Image.fromarray(picture[:, :, :3].astype("uint8"))
+        # Большие фото подрезаем до 3000 точек: страница целиком едет в браузер
+        # одной строкой, а на экране всё равно больше не покажется.
+        if max(sheet_image.size) > 3000:
+            share = 3000.0 / max(sheet_image.size)
+            sheet_image = sheet_image.resize((max(1, int(sheet_image.width * share)), max(1, int(sheet_image.height * share))),
+                               Image.LANCZOS)
+        png_buffer = io.BytesIO()
+        sheet_image.save(png_buffer, format="PNG")
+        image_b64 = base64.b64encode(png_buffer.getvalue()).decode("ascii")
+        page_b64 = base64.b64encode(
+            _viewer_page("data:image/png;base64," + image_b64).encode("utf-8")).decode("ascii")
+    except Exception as problem:      # noqa: BLE001
+        st.info("Лупа не собралась: %s. Смотрите просмотр выше." % type(problem).__name__)
+        return
+
+    markup = """
+<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; }
+  html, body { height:100%; }
+  body { margin:0; font-family:"Segoe UI", Arial, sans-serif; color:#15233a;
+         background:#f7f9fc; }
+  .bar { display:flex; gap:6px; align-items:center; padding:6px 8px; background:#eef4fa;
+         border:1px solid #d3dfec; border-radius:8px 8px 0 0; flex-wrap:wrap; }
+  .bar button { padding:7px 14px; border:1px solid #8fa3ba; background:#fff; border-radius:6px;
+                cursor:pointer; font-size:14px; font-weight:600; }
+  .bar button.on { background:#1f5f9e; color:#fff; border-color:#1f5f9e; }
+  .bar button.main { background:#1f5f9e; color:#fff; border-color:#1f5f9e; }
+  .status { font-size:13px; color:#41536a; margin-left:auto; }
+  .view { position:relative; height:calc(100% - 48px); overflow:auto; background:#fff;
+          border:1px solid #d3dfec; border-top:0; border-radius:0 0 8px 8px; }
+  img.sheet { display:block; width:100%; }
+  .loupe { position:absolute; width:190px; height:190px; border-radius:50%;
+           border:3px solid #1f5f9e; box-shadow:0 6px 16px rgba(20,40,80,.35);
+           background-repeat:no-repeat; background-color:#fff; pointer-events:none;
+           display:none; z-index:20; }
+  .hint { font-size:12px; color:#5a6b80; padding:4px 8px; }
+</style></head><body>
+<div style="height:100%">
+  <div class="bar">
+    <button id="loupeBtn" onclick="toggleLoupe()">Лупа</button>
+    <button class="main" onclick="openInNewTab()">Открыть в новой вкладке</button>
+    <span class="status" id="status">обычный вид</span>
+  </div>
+  <div class="view" id="viewArea">
+    <img class="sheet" id="sheet" src="data:image/png;base64,__IMAGE__" alt="оригинал документа">
+    <div class="loupe" id="loupe"></div>
+  </div>
+  <div class="hint" id="hint">Документ занимает всю область. «Лупа» включает кружок: ведите курсор
+    по листу, колесо мыши меняет кратность 2…10×, повторное нажатие выключает.
+    «Открыть в новой вкладке» — отдельная страница браузера со всеми инструментами
+    (если браузер не пускает новую вкладку, та же страница покажется здесь).</div>
+</div>
+<script>
+const PAGE_B64 = "__PAGE__";
+let loupeZoom = 3, loupeOn = false;
+const sheet = document.getElementById('sheet');
+const loupe = document.getElementById('loupe');
+const viewArea = document.getElementById('viewArea');
+const statusText = document.getElementById('status');
+const loupeBtn = document.getElementById('loupeBtn');
+
+function refreshView() {
+  loupeBtn.classList.toggle('on', loupeOn);
+  if (!loupeOn) { loupe.style.display = 'none'; }
+  statusText.textContent = loupeOn ? ('лупа ' + loupeZoom + '× · колесо меняет кратность')
+                                   : 'обычный вид · нажмите «Лупа»';
+}
+function toggleLoupe() { loupeOn = !loupeOn; refreshView(); }
+
+viewArea.addEventListener('mousemove', (event) => {
+  if (!loupeOn) { return; }
+  const box = sheet.getBoundingClientRect();
+  if (box.width < 10 || box.height < 10) { return; }
+  const x = event.clientX - box.left;
+  const y = event.clientY - box.top;
+  if (x < 0 || y < 0 || x > box.width || y > box.height) { loupe.style.display = 'none'; return; }
+  const size = 190;
+  const frameBox = viewArea.getBoundingClientRect();   // где на экране сама область листа
+  const pointX = box.left - frameBox.left + viewArea.scrollLeft + x;
+  const pointY = box.top - frameBox.top + viewArea.scrollTop + y;
+  loupe.style.backgroundImage = 'url("' + sheet.src + '")';
+  loupe.style.backgroundSize = (box.width * loupeZoom) + 'px ' + (box.height * loupeZoom) + 'px';
+  loupe.style.left = (pointX - size / 2) + 'px';
+  loupe.style.top = (pointY - size / 2) + 'px';
+  loupe.style.backgroundPosition = (-(x * loupeZoom - size / 2)) + 'px ' +
+                                   (-(y * loupeZoom - size / 2)) + 'px';
+  loupe.style.display = 'block';
+});
+viewArea.addEventListener('mouseleave', () => { loupe.style.display = 'none'; });
+viewArea.addEventListener('wheel', (event) => {
+  if (!loupeOn) { return; }
+  event.preventDefault();
+  loupeZoom = Math.min(10, Math.max(2, loupeZoom + (event.deltaY < 0 ? 0.5 : -0.5)));
+  statusText.textContent = 'лупа ' + loupeZoom + '× · колесо меняет кратность';
+}, {passive: false});
+
+function openInNewTab() {
+  const pageHtml = decodeURIComponent(escape(atob(PAGE_B64)));
+  let viewer = null;
+  try { viewer = window.open('', '_blank'); } catch (error) { viewer = null; }
+  if (viewer && viewer.document) {
+    viewer.document.open();
+    viewer.document.write(pageHtml);
+    viewer.document.close();
+    statusText.textContent = 'страница открыта в новой вкладке';
+    return;
+  }
+  // Браузер не дал новую вкладку — показываем ту же страницу здесь же.
+  document.open();
+  document.write(pageHtml);
+  document.close();
 }
 refreshView();
 </script></body></html>
 """
-    разметка = разметка.replace("__КАРТИНКА__", данные)
+    markup = markup.replace("__IMAGE__", image_b64).replace("__PAGE__", page_b64)
     if hasattr(st, "iframe"):
-        st.iframe(разметка, height=height)
+        st.iframe(markup, height=height)
     else:
         import streamlit.components.v1 as components   # noqa: PLC0415
-        components.html(разметка, height=height, scrolling=False)
+        components.html(markup, height=height, scrolling=False)
 
 
 def zoom_crop(image, scale, shift_x, shift_y):

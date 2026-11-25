@@ -305,44 +305,44 @@ NEXT_LINE_LABELS = {
 }
 
 
-def label_next_line_fields(pages, существующие, limit=6):
+def label_next_line_fields(pages, known_rows, limit=6):
     """Поля, где подпись стоит строкой, а значение — под ней."""
-    найдено = []
-    имена_есть = {item["field"] for item in существующие}
+    collected = []
+    existing_names = {item["field"] for item in known_rows}
     for page in pages:
-        строки = [строка.strip() for строка in page["text"].splitlines()]
-        for номер, строка in enumerate(строки):
-            низкая = строка.lower().strip(" :.")
-            for имя, подписи in NEXT_LINE_LABELS.items():
-                if имя in имена_есть:
+        row_list = [row_text.strip() for row_text in page["text"].splitlines()]
+        for row_index, row_text in enumerate(row_list):
+            lowered = row_text.lower().strip(" :.")
+            for label_key, label_list in NEXT_LINE_LABELS.items():
+                if label_key in existing_names:
                     continue
-                if not any(низкая == подпись or низкая.startswith(подпись + " ")
-                           for подпись in подписи):
+                if not any(lowered == label_text or lowered.startswith(label_text + " ")
+                           for label_text in label_list):
                     continue
                 # ищем первую непустую строку ниже
-                for следующая in строки[номер + 1:номер + 4]:
-                    значение = следующая.strip(" .,:;")
-                    if len(значение) < 3:
+                for next_line in row_list[row_index + 1:row_index + 4]:
+                    cell_value = next_line.strip(" .,:;")
+                    if len(cell_value) < 3:
                         continue
-                    if any(значение == item["value"] for item in найдено):
+                    if any(cell_value == item["value"] for item in collected):
                         break
-                    найдено.append({"field": имя, "value": значение[:110],
-                                    "page": page["page"], "line": номер + 1,
+                    collected.append({"field": label_key, "value": cell_value[:110],
+                                    "page": page["page"], "line": row_index + 1,
                                     "how": "подпись строкой выше"})
-                    имена_есть.add(имя)
+                    existing_names.add(label_key)
                     break
-                if len(найдено) >= limit:
-                    return найдено
-    return найдено
+                if len(collected) >= limit:
+                    return collected
+    return collected
 
 
-def label_value_fields(pages, существующие, limit=12):
+def label_value_fields(pages, known_rows, limit=12):
     """Поля по подписям «подпись: значение» — для любого вида документа."""
-    найдено = []
-    известные_имена = {item["field"] for item in существующие}
+    collected = []
+    known_names = {item["field"] for item in known_rows}
     for page in pages:
         for name, pattern in LABEL_VALUE_RULES:
-            if name in известные_имена and len(найдено) >= limit:
+            if name in known_names and len(collected) >= limit:
                 break
             for match in re.finditer(pattern, page["text"]):
                 value = (match.group(1) or "").strip(" .,:;№-")
@@ -354,11 +354,11 @@ def label_value_fields(pages, существующие, limit=12):
                 item = {"field": name, "value": value[:110], "page": page["page"],
                         "line": line_number, "how": "подпись: " + name}
                 # такое же значение уже есть под другим именем — не дублируем
-                if any(other["value"].strip() == value.strip() for other in найдено):
+                if any(other["value"].strip() == value.strip() for other in collected):
                     continue
-                if item not in найдено and len(найдено) < limit:
-                    найдено.append(item)
-    return найдено
+                if item not in collected and len(collected) < limit:
+                    collected.append(item)
+    return collected
 
 
 # Правила, которым нужен текст страницы целиком: значение и подпись бывают на разных строках.
@@ -437,24 +437,24 @@ def extract_fields(pages, doc_type, limit=40):
                         return found
     # значения не должны тянуть за собой следующее предложение
     for item in found:
-        значение = str(item["value"])
-        обрезано = re.split(r"\.\s+(?=[А-ЯЁ])|;\s+(?=[А-ЯЁ])", значение)[0].strip(" .,;:-")
-        if обрезано and обрезано != значение:
-            item["value"] = обрезано
+        cell_value = str(item["value"])
+        trimmed = re.split(r"\.\s+(?=[А-ЯЁ])|;\s+(?=[А-ЯЁ])", cell_value)[0].strip(" .,;:-")
+        if trimmed and trimmed != cell_value:
+            item["value"] = trimmed
 
     # Общий проход по подписям: добираем то, что точные правила не поймали.
     if doc_type != "билет, талон или проездной":
-        добор = label_next_line_fields(pages, found) + label_value_fields(pages, found)
-        имена_есть = {item["field"] for item in found}
-        for item in добор:
-            if item["field"] not in имена_есть:
+        extra_fields = label_next_line_fields(pages, found) + label_value_fields(pages, found)
+        existing_names = {item["field"] for item in found}
+        for item in extra_fields:
+            if item["field"] not in existing_names:
                 found.append(item)
-                имена_есть.add(item["field"])
+                existing_names.add(item["field"])
 
     # Чек без назначения платежа — пишем пояснение, а не «не хватает» без объяснений.
     if doc_type == "чек или квитанция об оплате":
-        имена = {item["field"] for item in found}
-        if not any("назначен" in имя for имя in имена):
+        field_names_list = {item["field"] for item in found}
+        if not any("назначен" in label_key for label_key in field_names_list):
             found.append({"field": "назначение платежа (пояснение)",
                           "value": "в тексте чека нет строки «назначение платежа» — "
                                    "уточните у плательщика или посмотрите QR-код",
@@ -462,30 +462,30 @@ def extract_fields(pages, doc_type, limit=40):
 
     # Билет со стоимостью 0 — вероятно льготный: пишем словами, а не молчим.
     if doc_type == "билет, талон или проездной":
-        откуда = next((item["value"] for item in found
+        route_from = next((item["value"] for item in found
                        if "станция отправления" in item["field"].lower()), "")
-        куда = next((item["value"] for item in found
+        route_to = next((item["value"] for item in found
                      if "станция прибытия" in item["field"].lower()), "")
-        if откуда and куда:
-            found.insert(0, {"field": "маршрут", "value": "%s → %s" % (откуда, куда),
+        if route_from and route_to:
+            found.insert(0, {"field": "маршрут", "value": "%s → %s" % (route_from, route_to),
                              "page": 1, "line": 1, "how": "собрано правилом из станций"})
         else:
-            текст_страниц = " ".join(page["text"] for page in pages).lower()
-            if "маршрут" in текст_страниц:
+            pages_text = " ".join(page["text"] for page in pages).lower()
+            if "маршрут" in pages_text:
                 found.append({"field": "маршрут (пояснение)",
                               "value": "названия станций в текстовом слое отсутствуют — "
                                        "они в картинке или штрихкоде",
                               "page": 1, "line": 1, "how": "вывод правила (не модель)"})
-        цена = [item["value"] for item in found if "цена" in item["field"].lower()]
-        тариф = [item["value"] for item in found if "тариф" in item["field"].lower()]
-        ноль = all(str(значение).replace(" ", "").split("/")[0].startswith(("0,", "0."))
-                   for значение in цена) if цена else False
-        if ноль:
-            пояснение = "цена 0"
-            if тариф:
-                пояснение += ", тариф " + str(тариф[0]).replace(" ", "")
+        price_values = [item["value"] for item in found if "цена" in item["field"].lower()]
+        tariff_values = [item["value"] for item in found if "тариф" in item["field"].lower()]
+        is_zero = all(str(cell_value).replace(" ", "").split("/")[0].startswith(("0,", "0."))
+                   for cell_value in price_values) if price_values else False
+        if is_zero:
+            note_text = "цена 0"
+            if tariff_values:
+                note_text += ", тариф " + str(tariff_values[0]).replace(" ", "")
             found.append({"field": "льгота по билету",
-                          "value": пояснение + " — билет льготный (плата не взимается)",
+                          "value": note_text + " — билет льготный (плата не взимается)",
                           "page": 1, "line": 1, "how": "вывод правила (не модель)"})
     return found
 

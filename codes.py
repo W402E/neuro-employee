@@ -235,21 +235,21 @@ def _variants(image):
         import cv2
     except Exception:      # noqa: BLE001
         return [image]
-    готовые = [image]
+    prepared = [image]
     try:
-        серый = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        готовые.append(серый)
-        длинная = max(серый.shape[:2])
-        if длинная < 2200:
+        gray_copy = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        prepared.append(gray_copy)
+        longest_side = max(gray_copy.shape[:2])
+        if longest_side < 2200:
             factor = 2.0
-            готовые.append(cv2.resize(серый, None, fx=factor, fy=factor,
+            prepared.append(cv2.resize(gray_copy, None, fx=factor, fy=factor,
                                       interpolation=cv2.INTER_CUBIC))
-        _, бинарь = cv2.threshold(серый, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        готовые.append(бинарь)
-        готовые.append(cv2.bitwise_not(бинарь))
+        _, binarized = cv2.threshold(gray_copy, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        prepared.append(binarized)
+        prepared.append(cv2.bitwise_not(binarized))
     except Exception:      # noqa: BLE001
         pass
-    return готовые
+    return prepared
 
 
 def _decode_image(image):
@@ -266,14 +266,14 @@ def _decode_one(image):
     """Все коды одной картинки: zxing-cpp (список) + OpenCV (несколько QR)."""
     found = []
 
-    def добавить(формат, текст):
-        текст = (текст or "").strip()
-        if not текст:
+    def add_found(format_name, payload_text):
+        payload_text = (payload_text or "").strip()
+        if not payload_text:
             return
         # один и тот же код находят оба декодера — оставляем один
-        if any(existing["text"] == текст for existing in found):
+        if any(existing["text"] == payload_text for existing in found):
             return
-        found.append({"format": формат, "text": текст})
+        found.append({"format": format_name, "text": payload_text})
 
     try:
         import zxingcpp
@@ -282,7 +282,7 @@ def _decode_one(image):
     if zxingcpp is not None:
         try:
             for result in zxingcpp.read_barcodes(image):
-                добавить(str(result.format).split(".")[-1], getattr(result, "text", ""))
+                add_found(str(result.format).split(".")[-1], getattr(result, "text", ""))
         except Exception:      # noqa: BLE001
             pass
 
@@ -298,12 +298,12 @@ def _decode_one(image):
                      cv2.ROTATE_90_COUNTERCLOCKWISE):
             working = image if turn is None else cv2.rotate(image, turn)
             try:
-                слова, _, _ = detector.detectAndDecodeMulti(working)
-                for data in слова or []:
-                    добавить("QR", data)
+                decoded_texts, _, _ = detector.detectAndDecodeMulti(working)
+                for data in decoded_texts or []:
+                    add_found("QR", data)
             except Exception:      # noqa: BLE001
                 data, _, _ = detector.detectAndDecode(working)
-                добавить("QR", data)
+                add_found("QR", data)
     except Exception:      # noqa: BLE001
         pass
     return found
